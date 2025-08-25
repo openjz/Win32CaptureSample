@@ -34,8 +34,22 @@ SimpleCapture::SimpleCapture(
     m_d3dDevice->GetImmediateContext(m_d3dContext.put());
 
     auto format = static_cast<DXGI_FORMAT>(m_pixelFormat);
+
+    //dxgi的交换链分为老的bitblt模型和新的flip模型（翻转模型），它们之间的区别很简单：
+    // - bitblt模型中，交换方式是把视频帧从后台缓冲区拷贝到前台缓冲区
+	// - flip模型中，交换方式是切换一下缓冲区指针，并不发生内存拷贝
+    // 
+    // Discard 和 Sequential的区别（下面是大概的理解，有些地方存疑）
+    // 参考https://learn.microsoft.com/en-us/windows/win32/api/dxgi/ne-dxgi-dxgi_swap_effect?redirectedfrom=MSDN
+	// - Discard 模式下，每次调用Present后，新的可写buffer中不会保留任何内容，必须完全重绘
+	// - Sequential 模式下，每次调用Present后，新的可写buffer中会保留上一次写入的内容，可以部分重绘
+	// Sequential 模式会保证buffer的写入顺序和显示顺序是一致的，而Discard有可能会跳帧显示
+    // 
+	// DXGI_SWAP_CHAIN_DESC1中，BufferCount表示后台缓冲区的数量
+	// flip模型要求后台缓冲区至少为2个，bitblt模型没有要求
     m_swapChain = util::CreateDXGISwapChain(m_d3dDevice, static_cast<uint32_t>(m_item.Size().Width), static_cast<uint32_t>(m_item.Size().Height),
         format, 2).as<IDXGISwapChain3>();
+	//注意，这里是设置颜色空间，不是像素格式
     winrt::check_hresult(m_swapChain->SetColorSpace1(GetColorSpaceFromPixelFormat(format)));
 
     // We use 'CreateFreeThreaded' instead of 'Create' so that the FrameArrived

@@ -26,6 +26,7 @@ DirtyRegionVisualizer::DirtyRegionVisualizer(winrt::com_ptr<ID3D11Device> const&
 
     winrt::check_hresult(m_d2dDevice->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, m_d2dContext.put()));
     
+	//创建一个带一点透明度的红色画刷，保存在m_brush中
     D2D1_COLOR_F color = { 1.0f, 0.0f, 0.0f, 0.6f };
     winrt::check_hresult(m_d2dContext->CreateSolidColorBrush(color, m_brush.put()));
 }
@@ -37,22 +38,26 @@ void DirtyRegionVisualizer::Render(
     auto dirtyRegion = captureFrame.DirtyRegions();
     if (dirtyRegion.Size() > 0)
     {
+        //将texture2D转换为一个临时位图，这里每帧都创建一个临时位图
         auto dxgiTexture = renderTargetTexture.as<IDXGISurface>();
         winrt::com_ptr<ID2D1Bitmap1> d2dBitmap;
         winrt::check_hresult(m_d2dContext->CreateBitmapFromDxgiSurface(dxgiTexture.get(), nullptr, d2dBitmap.put()));
 
+        //使用RAII复原target
         m_d2dContext->SetTarget(d2dBitmap.get());
         auto unsetTarget = wil::scope_exit([d2dContext = m_d2dContext]()
             {
                 d2dContext->SetTarget(nullptr);
             });
 
+		//利用RAII划定Begin和End Draw的范围
         m_d2dContext->BeginDraw();
         auto endDraw = wil::scope_exit([d2dContext = m_d2dContext]()
             {
                 winrt::check_hresult(d2dContext->EndDraw());
             });
 
+        //对每个dirty region，将其绘制到目标位图上
         for (auto&& dirtyRegion : dirtyRegion)
         {
             D2D1_RECT_F rect =
