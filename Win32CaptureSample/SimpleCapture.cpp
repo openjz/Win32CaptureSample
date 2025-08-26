@@ -60,6 +60,9 @@ SimpleCapture::SimpleCapture(
     m_framePool = winrt::Direct3D11CaptureFramePool::CreateFreeThreaded(m_device, m_pixelFormat, 2, m_item.Size());
     m_session = m_framePool.CreateCaptureSession(m_item);
     m_lastSize = m_item.Size();
+	//注意，OnFrameArrived 中通过 TryGetNextFrame 获取到的一个frame会占用framepool中的一个buffer，这个frame不释放的话，它会一直占用这个buffer
+	//当framepool中的buffer都被占用时，新的frame就不会写入framepool，OnFrameArrived 不会触发
+	//所以对 frame 的处理要尽量快，如果处理不过来，可以考虑增加 framepool 的 buffer 数量
     m_framePool.FrameArrived({ this, &SimpleCapture::OnFrameArrived });
 }
 
@@ -72,6 +75,7 @@ void SimpleCapture::StartCapture()
 winrt::ICompositionSurface SimpleCapture::CreateSurface(winrt::Compositor const& compositor)
 {
     CheckClosed();
+	//这里是要获取到交换链的输出，然后在app.cpp中把它绑定到ui组件上
     return util::CreateCompositionSurfaceForSwapChain(compositor, m_swapChain.get());
 }
 
@@ -99,6 +103,7 @@ void SimpleCapture::Close()
     }
 }
 
+//更新交换链：resize和更新像素格式
 void SimpleCapture::ResizeSwapChain()
 {
     auto format = static_cast<DXGI_FORMAT>(m_pixelFormat);
@@ -157,17 +162,23 @@ void SimpleCapture::OnFrameArrived(winrt::Direct3D11CaptureFramePool const& send
 
     {
         auto frame = sender.TryGetNextFrame();
-        swapChainResizedToFrame = TryResizeSwapChain(frame);
+		swapChainResizedToFrame = TryResizeSwapChain(frame);    //resize是由目标窗口大小变化引起的，只能由frame来检测
 
         winrt::com_ptr<ID3D11Texture2D> backBuffer;
         winrt::check_hresult(m_swapChain->GetBuffer(0, winrt::guid_of<ID3D11Texture2D>(), backBuffer.put_void()));
 
+        //texture 是 direct3D 中的概念，surface 是 dxgi 中的概念，surface是对texture的一个包装，用于交换链输出
+        //texture 是 纹理，存储2d图像数据
         auto surfaceTexture = GetDXGIInterfaceFromObject<ID3D11Texture2D>(frame.Surface());
 
         // If we have a dirty region visualizer, then we're running on a build
         // of Windows that supports dirty regions.
+
+		// GraphicsCaptureDirtyRegionMode::ReportAndRender 是指报告脏区域，并且只渲染这些区域
+		// GraphicsCaptureDirtyRegionMode::ReportOnly 是指仅报告脏区域，还是渲染整个画面
         bool renderRects = m_dirtyRegionVisualizer && frame.DirtyRegionMode() == winrt::GraphicsCaptureDirtyRegionMode::ReportAndRender;
 
+        //整个绘制
         if (!renderRects)
         {
             // On builds of Windows that don't support dirty regions or when the dirty
@@ -176,6 +187,7 @@ void SimpleCapture::OnFrameArrived(winrt::Direct3D11CaptureFramePool const& send
             // copy surfaceTexture to backBuffer
             m_d3dContext->CopyResource(backBuffer.get(), surfaceTexture.get());
         }
+        //局部绘制
         else
         {
             // When the dirty region mode is set to ReportAndRender, only the pixels within
@@ -183,6 +195,12 @@ void SimpleCapture::OnFrameArrived(winrt::Direct3D11CaptureFramePool const& send
             // to opaque black and copy out the dirty regions.
 
             // First, let's clear our render target
+
+            // 视图是纹理数据的访问方式 (RTV / DSV / SRV / UAV) 
+            // - ID3D11RenderTargetView：写入颜色。
+            // - ID3D11DepthStencilView：深度 / 模板。
+            // - ID3D11ShaderResourceView：着色器采样。
+            // - ID3D11UnorderedAccessView：无序读写。
             winrt::com_ptr<ID3D11RenderTargetView> rtv;
             winrt::check_hresult(m_d3dDevice->CreateRenderTargetView(backBuffer.get(), nullptr, rtv.put()));
             float clearColor[] = { 0.0f, 0.0f, 0.0f, 1.0f };
@@ -224,11 +242,12 @@ void SimpleCapture::OnFrameArrived(winrt::Direct3D11CaptureFramePool const& send
                 region.right = static_cast<uint32_t>(right);
                 region.top = static_cast<uint32_t>(top);
                 region.bottom = static_cast<uint32_t>(bottom);
-                region.back = 1;
+				region.back = 1;    //back是3D纹理的深度，对应z轴，对2D纹理来说，back恒为1
                 m_d3dContext->CopySubresourceRegion(backBuffer.get(), 0, static_cast<uint32_t>(left), static_cast<uint32_t>(top), 0, surfaceTexture.get(), 0, &region);
             }
         }
 
+		// 可视化显示脏区域（刷成半透明红色）
         if (m_dirtyRegionVisualizer && m_visualizeDirtyRegions.load())
         {
             m_dirtyRegionVisualizer->Render(backBuffer, frame);
@@ -236,8 +255,15 @@ void SimpleCapture::OnFrameArrived(winrt::Direct3D11CaptureFramePool const& send
     }
 
     DXGI_PRESENT_PARAMETERS presentParameters{};
+	//交换链做一个交换，（1）把backbuffer提交到显示队列，（2）把第一个待显示buffer交换到前台，（3）把前台buffer变成新的backbuffer
+	//参数1：syncInterval，表示垂直同步间隔
+	// - 0表示不做垂直同步，将backbuffer立即交换到前台，帧率无限制，可能会出现画面撕裂
+    //  （取决于参数2 flag，当flag为DXGI_PRESENT_ALLOW_TEARING时才会真正发生画面撕裂）
+	// - 1表示等待屏幕刷新后再交换，帧率最高为屏幕刷新率
+	// - 其他值表示等待多次屏幕刷新后再交换，帧率会降低
     m_swapChain->Present1(1, 0, &presentParameters);
 
+	//这里除了检查窗口大小是否变化，还检查了像素格式是否变化，像素格式是用户在ui上设置的，这里检查用户是否修改了像素格式
     swapChainResizedToFrame = swapChainResizedToFrame || TryUpdatePixelFormat();
 
     if (swapChainResizedToFrame)

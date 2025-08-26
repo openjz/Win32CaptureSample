@@ -290,9 +290,11 @@ void App::StartCaptureFromItem(winrt::GraphicsCaptureItem item)
 {
     m_capture = std::make_unique<SimpleCapture>(m_device, m_dirtyRegionVisualizer, item, m_pixelFormat);
 
+    //这里是要把gpu交换链输出绑定到ui组件上
     auto surface = m_capture->CreateSurface(m_compositor);
     m_brush.Surface(surface);
 
+	//先绑定交换链的输出，再开始捕获
     m_capture->StartCapture();
 }
 
