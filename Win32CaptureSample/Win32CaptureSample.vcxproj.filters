@@ -10,6 +10,18 @@
     <ClCompile Include="WindowList.cpp" />
     <ClCompile Include="MonitorList.cpp" />
     <ClCompile Include="DirtyRegionVisualizer.cpp" />
+    <ClCompile Include="shiwj\ShiwjCommon.cpp">
+      <Filter>shiwj</Filter>
+    </ClCompile>
+    <ClCompile Include="shiwj\ShiwjEncoder.cpp">
+      <Filter>shiwj</Filter>
+    </ClCompile>
+    <ClCompile Include="shiwj\MP4Encoder.cpp">
+      <Filter>shiwj</Filter>
+    </ClCompile>
+    <ClCompile Include="shiwj\Preproc.cpp">
+      <Filter>shiwj</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="pch.h" />
@@ -20,6 +32,18 @@
     <ClInclude Include="WindowList.h" />
     <ClInclude Include="MonitorList.h" />
     <ClInclude Include="DirtyRegionVisualizer.h" />
+    <ClInclude Include="shiwj\ShiwjCommon.h">
+      <Filter>shiwj</Filter>
+    </ClInclude>
+    <ClInclude Include="shiwj\ShiwjEncoder.h">
+      <Filter>shiwj</Filter>
+    </ClInclude>
+    <ClInclude Include="shiwj\MP4Encoder.h">
+      <Filter>shiwj</Filter>
+    </ClInclude>
+    <ClInclude Include="shiwj\Preproc.h">
+      <Filter>shiwj</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
@@ -29,5 +53,10 @@
   </ItemGroup>
   <ItemGroup>
     <Manifest Include="app.manifest" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="shiwj">
+      <UniqueIdentifier>{fad4dc5b-1c36-4a0c-9879-d63d406324f6}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
 </Project>

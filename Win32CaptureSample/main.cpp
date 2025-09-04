@@ -2,6 +2,8 @@
 #include "App.h"
 #include "SampleWindow.h"
 
+#include "shiwj/ShiwjCommon.h"
+
 namespace winrt
 {
     using namespace Windows::Graphics::Capture;
@@ -18,7 +20,10 @@ int __stdcall WinMain(HINSTANCE, HINSTANCE, PSTR, int)
 {
     // Initialize COM
     winrt::init_apartment(winrt::apartment_type::single_threaded);
-
+    
+	// Initialize logging and create data folders
+	shiwj::Init();
+    
     // Check to see that capture is supported
     auto isCaptureSupported = winrt::Windows::Graphics::Capture::GraphicsCaptureSession::IsSupported();
     if (!isCaptureSupported)

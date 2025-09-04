@@ -82,6 +82,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <AdditionalOptions>/await %(AdditionalOptions)</AdditionalOptions>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <AdditionalIncludeDirectories>$(ProjectDir)shiwj/thirdparty;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -114,6 +115,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <AdditionalOptions>/await %(AdditionalOptions)</AdditionalOptions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <AdditionalIncludeDirectories>$(ProjectDir)shiwj/thirdparty;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
@@ -149,6 +151,10 @@
     <ClCompile Include="MonitorList.cpp" />
     <ClCompile Include="pch.cpp" />
     <ClCompile Include="SampleWindow.cpp" />
+    <ClCompile Include="shiwj\MP4Encoder.cpp" />
+    <ClCompile Include="shiwj\Preproc.cpp" />
+    <ClCompile Include="shiwj\ShiwjCommon.cpp" />
+    <ClCompile Include="shiwj\ShiwjEncoder.cpp" />
     <ClCompile Include="SimpleCapture.cpp" />
     <ClCompile Include="WindowList.cpp" />
   </ItemGroup>
@@ -159,6 +165,10 @@
     <ClInclude Include="MonitorList.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="SampleWindow.h" />
+    <ClInclude Include="shiwj\MP4Encoder.h" />
+    <ClInclude Include="shiwj\Preproc.h" />
+    <ClInclude Include="shiwj\ShiwjCommon.h" />
+    <ClInclude Include="shiwj\ShiwjEncoder.h" />
     <ClInclude Include="SimpleCapture.h" />
     <ClInclude Include="WindowList.h" />
   </ItemGroup>
