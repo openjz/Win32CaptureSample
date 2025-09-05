@@ -5,7 +5,9 @@ author:     firehood
 purpose:    MP4编码器，基于开源库mp4v2实现（https://code.google.com/p/mp4v2/）。
 *********************************************************************/
 #pragma once
-#include "include/mp4v2/mp4v2.h"
+
+#include "mp4v2/mp4v2.h"
+
 // NALU单元
 typedef struct _MP4ENC_NaluUnit
 {

@@ -21,13 +21,11 @@ namespace shiwj{
 	std::string Wstring2Utf8String(const std::wstring& wstr);
 
 	std::wstring Utf8String2Wstring(const std::string& str);
+
+	uint64_t GetCurrentTimestampMicro();
+
+	uint64_t GetCurrentTimestampMilli();
 }
-
-
-//utils
-uint64_t GetCurrentTimestampMicro();
-
-uint64_t GetCurrentTimestampMilli();
 
 int WriteBinaryToFile(winrt::Windows::Storage::StorageFile& file, winrt::array_view<uint8_t> data);
 

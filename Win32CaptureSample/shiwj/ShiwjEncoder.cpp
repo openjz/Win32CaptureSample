@@ -1,3 +1,5 @@
+#include <filesystem>
+
 #include <mfapi.h>
 #include <atlbase.h>
 #include <codecapi.h>
@@ -10,15 +12,29 @@
 
 namespace shiwj
 {
+	static void sleepE(int interValue) {
+		if (interValue < 0) {
+			return;
+		}
+		timeBeginPeriod(1);
+		DWORD dwTime = timeGetTime();
+		Sleep(interValue);
+		timeEndPeriod(1);
+	}
+
 	CMFEncoder::~CMFEncoder()
 	{
 		Close();
 	}
 
-	int CMFEncoder::Init(winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice device,
+	int CMFEncoder::Init(EventCBFunc eventCbFunc, 
+		winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice device,
 		int width, int height, int fps, const char* filePath, bool inputAudio, bool outputAudio)
 	{
 		PLOG(plog::info) << L"CMFEncoder::Init, width:" << width << L" height:" << height << L" fps:" << fps << L" filepath:" << filePath;
+		m_eventCbFunc = eventCbFunc;
+		
+		InitializeCriticalSection(&(m_cs));
 		m_encoderParam = std::make_unique<EncoderParam>();
 
 		HRESULT hr = MFStartup(MF_VERSION);
@@ -36,14 +52,13 @@ namespace shiwj
 
 		//将d3d设备绑定到 mf dxgi device manager
 		auto dxgiDevice = m_d3dDevice.as<IDXGIDevice>();
-		HRESULT hr = m_deviceManager->ResetDevice(dxgiDevice.get(), m_resetToken);
+		hr = m_deviceManager->ResetDevice(dxgiDevice.get(), m_resetToken);
 
 		m_writeMp4Event = CreateEvent(NULL, FALSE, FALSE, NULL);
 		PLOG(plog::info) << L"DeskCapEncoder create hr=" << hr;
 
 		//start encode
-		int errcode = 1;
-		bool bRet = false;
+		int ret = 0;
 
 		m_recordInfo.width = width;
 		m_recordInfo.height = height;
@@ -59,125 +74,101 @@ namespace shiwj
 		m_encoderParam->bitRate = 10000000;
 		m_encoderParam->quality = 50;
 
-		if (m_bCaptureInit && !m_bEncoderInit)
-		{
-			bRet = CreateEncoder();
-			//m_capture->SetEncoderTarget(m_encoder);
-			m_bEncoderInit = bRet;
-			LOG_INFO(L"StartRecord encoder bInit=%d\n", bRet);
-		}
+		ret = CreateEncoder();
 
-		if (bRet && m_encoder)
+		ret = StartEncoder();
+		PLOG(plog::info) << L"StartEncoder:" << ret;
+#if 0
+		if (inputAudio)
 		{
-			bRet = m_encoder->StartEncoder();
-			LOG_INFO(L"StartEncoder:%d\n", bRet);
-		}
-
-
-		if (m_encoder)
-		{
-			if (inputAudio)
+			if (m_audioInCapture)
 			{
-				if (m_audioInCapture)
-				{
-					m_audioInCapture->Stop();
-				}
-				//fopen_s(&m_audioinFile, "audio.aac", "ab");
-				m_audioInCapture = CreateAudioCaptrue();
-				bRet = m_audioInCapture->Init(CoreAudioCaptrueInterface::AUDIOCAPTURE_MIC, nullptr, this, true, AUDIOENCODE_AAC);
-				if (bRet)
-				{
-					bRet = m_audioInCapture->Start();
-					m_audioInCapture->SetCallbackEx(&AudioDataCallBack);
-				}
-				else
-				{
-					errcode = DESK_CAP_OPEN_AUDIO_CAP_ERROR;
-				}
+				m_audioInCapture->Stop();
 			}
-
-			if (outputAudio)
+			//fopen_s(&m_audioinFile, "audio.aac", "ab");
+			m_audioInCapture = CreateAudioCaptrue();
+			bRet = m_audioInCapture->Init(CoreAudioCaptrueInterface::AUDIOCAPTURE_MIC, nullptr, this, true, AUDIOENCODE_AAC);
+			if (bRet)
 			{
-				if (m_audioOutCapture)
-				{
-					m_audioOutCapture->Stop();
-				}
-				m_audioOutCapture = CreateAudioCaptrue();
-				bRet = m_audioOutCapture->Init(CoreAudioCaptrueInterface::AUDIOCAPTURE_SYSTEM, nullptr, this, true, AUDIOENCODE_AAC);
-				if (bRet)
-				{
-					bRet = m_audioOutCapture->Start();
-					m_audioOutCapture->SetCallbackEx(&AudioDataCallBack);
-				}
-				else
-				{
-					errcode = DESK_CAP_OPEN_AUDIO_CAP_ERROR;
-				}
-			}
-
-
-			m_recordInfo.mp4Handle = m_mp4Encoder.CreateMP4File(m_recordInfo.filepath.c_str(), m_encoderParam->width, m_encoderParam->height, m_nTimeScale, m_encoderParam->fps);
-			if (m_recordInfo.mp4Handle == MP4_INVALID_FILE_HANDLE)
-			{
-				errcode = DESK_CAP_CREATE_MP4_FILE_ERROR;
+				bRet = m_audioInCapture->Start();
+				m_audioInCapture->SetCallbackEx(&AudioDataCallBack);
 			}
 			else
 			{
-				if (m_audioInCapture)
-				{
-					m_recordInfo.mp4AudioInTrack = m_mp4Encoder.WriteAACMetadata(m_recordInfo.mp4Handle, 48000, 2);
-				}
-				if (m_audioOutCapture)
-				{
-					m_recordInfo.mp4AudioOutTrack = m_mp4Encoder.WriteAACMetadata(m_recordInfo.mp4Handle, 48000, 2);
-				}
-
-				if (thRecord == nullptr)
-				{
-					m_bRecord = true;
-					thRecord = std::make_shared<std::thread>(&DeskCapEncoder::RecordFileFun, this);
-				}
-				errcode = DESK_CAP_RETURN_OK;
+				errcode = DESK_CAP_OPEN_AUDIO_CAP_ERROR;
 			}
 		}
 
-
-		if (m_notify)
+		if (outputAudio)
 		{
-			m_notify->OnStartManualRecord(errcode, 0, GetTickCount64());
+			if (m_audioOutCapture)
+			{
+				m_audioOutCapture->Stop();
+			}
+			m_audioOutCapture = CreateAudioCaptrue();
+			bRet = m_audioOutCapture->Init(CoreAudioCaptrueInterface::AUDIOCAPTURE_SYSTEM, nullptr, this, true, AUDIOENCODE_AAC);
+			if (bRet)
+			{
+				bRet = m_audioOutCapture->Start();
+				m_audioOutCapture->SetCallbackEx(&AudioDataCallBack);
+			}
+			else
+			{
+				errcode = DESK_CAP_OPEN_AUDIO_CAP_ERROR;
+			}
 		}
-		LOG_INFO(L"StartManualRecord width:%d,height:%d fps:%d recordPath:%s  isCaptureAudio:%d CaptureOutAudio:%d end",
-			width, height, fps, util::desktop::Utf8String2Wstring(filePath).c_str(), inputAudio ? 1 : 0, outputAudio ? 1 : 0);
+#endif
+
+		m_recordInfo.mp4Handle = m_mp4Encoder.CreateMP4File(m_recordInfo.filepath.c_str(), m_encoderParam->width, m_encoderParam->height, m_nTimeScale, m_encoderParam->fps);
+		if (m_recordInfo.mp4Handle == MP4_INVALID_FILE_HANDLE)
+		{
+			ret = 1;
+		}
+		else
+		{
+#if 0
+			if (m_audioInCapture)
+			{
+				m_recordInfo.mp4AudioInTrack = m_mp4Encoder.WriteAACMetadata(m_recordInfo.mp4Handle, 48000, 2);
+			}
+			if (m_audioOutCapture)
+			{
+				m_recordInfo.mp4AudioOutTrack = m_mp4Encoder.WriteAACMetadata(m_recordInfo.mp4Handle, 48000, 2);
+			}
+#endif
+			m_bRecord = true;
+			thRecord = std::thread(&CMFEncoder::RecordFileFun, this);
+			ret = 0;
+		}
+		PLOG(plog::info) << L"CMFEncoder::Init end";
+		return ret;
 	}
 
+	int CMFEncoder::EncodeFrame(winrt::com_ptr<ID3D11Texture2D> frameTexture)
+	{
+		std::lock_guard<std::mutex> lock(m_d3d11textureLock);
+		m_d3d11texture = frameTexture;
+		return 0;
+	}
 	void CMFEncoder::Close() {
-		InnerStopCapture();
-		StopEncoder();
-		if (m_captrueParam)
-			free(m_captrueParam);
-		/* if (m_encoderParam && m_encoderParam->deskEncodeParam)
-			 free(m_encoderParam->deskEncodeParam);*/  // 0418
-		if (m_encoderParam)
-			free(m_encoderParam);
-		if (m_hWnd)
+		PLOG(plog::info) << L"CMFEncoder::Close";
+		int ret = 0;
+		m_bRecord = false;
+		if (thRecord.joinable())
 		{
-			DestroyWindow(m_hWnd);
-			// CloseHandle(m_hWnd);
+			thRecord.join();
 		}
-		/*  if (m_d3d11device)
-		  {
-			  m_d3d11device = nullptr;
-		  }*/
-		  /*  m_device.Close();
-			m_deviceManager.Release();
-			m_deviceManager = nullptr;
-			m_encoder = nullptr;*/
-			//  m_encoder = nullptr;
+		m_mp4Encoder.CloseMP4File(m_recordInfo.mp4Handle);
+
+		StopEncoder();
+
+		DeleteCriticalSection(&m_cs);
+		StopEncoder();
 
 		HRESULT hr;
 		hr = MFShutdown();
+		PLOG(plog::info) << L"MFShutdown =" << hr;
 		CloseHandle(m_writeMp4Event);
-		LOG_INFO(L"MFShutdown =%u \n", hr);
 
 		if (m_deviceManager) {
 			m_deviceManager->Release();
@@ -187,8 +178,6 @@ namespace shiwj
 			CloseHandle(m_writeMp4Event);
 			m_writeMp4Event = NULL;
 		}
-		HRESULT hr = MFShutdown();
-		PLOG(plog::info) << L"MFShutdown =" << hr;
 	}
 
 	int CMFEncoder::CreateEncoder()
@@ -336,10 +325,9 @@ namespace shiwj
 		PLOG(plog::info) << L"Create scale texture success";
 
 
-		SetEncodeCallback(std::bind(&DeskCapEncoder::EncoderCallback, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4, std::placeholders::_5, std::placeholders::_6, std::placeholders::_7), nullptr);
+		SetEncodeCallback(std::bind(&CMFEncoder::EncodeCallback, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4, std::placeholders::_5, std::placeholders::_6, std::placeholders::_7), nullptr);
 
-
-		return bRet;
+		return 0;
 	}
 
 	int CMFEncoder::SetInputOutPut() {
@@ -477,7 +465,7 @@ namespace shiwj
 	void CMFEncoder::EncodeCallback(unsigned char* data, int len, unsigned long long time, bool invalid, bool iskey, int Iinvalid, void* parg)
 	{
 
-		st_video  videodata;
+		st_video videodata;
 		videodata.len = len;
 		videodata.pdata = new unsigned char[len];
 		videodata.isIDR = iskey;
@@ -491,15 +479,9 @@ namespace shiwj
 		bool bDelCacheFile = false;
 		if (m_cacheMaxSec < (videodata.uiTime - stVideo.uiTime))
 		{
-			// printf("cache Video >maxCacheTime maxTime:%d,current:%u", videodata.uiTime - stVideo.uiTime);
-			 //DBG_LogInfo("cache Video >maxCacheTime maxTime:%d,current:%d", videodata.uiTime - stVideo.uiTime);
 			bDelCacheFile = true;
 		}
 		LeaveCriticalSection(&(m_cs));
-		//if (pFile2 == nullptr) {
-		//    fopen_s(&pFile2, "D:\\1\\test9.h264", "wb");
-		//}
-		//fwrite(data, len, 1, pFile2);
 
 		if (bDelCacheFile)
 		{
@@ -576,7 +558,315 @@ namespace shiwj
 				m_audioOutList.pop_front();
 			}
 		}
-		//printf("len = %d\n",len);
 	}
 
+	int CMFEncoder::StartEncoder()
+	{
+		int ret = 0;
+		HRESULT hr;
+
+		hr = m_transform->ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, NULL);
+		if (FAILED(hr))
+		{
+			PLOG(plog::error) << L"MFT_MESSAGE_COMMAND_FLUSH failed. hr=" << hr;
+			return 1;
+		}
+		hr = m_transform->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, NULL);
+		if (FAILED(hr))
+		{
+			PLOG(plog::error) << L"MFT_MESSAGE_NOTIFY_BEGIN_STREAMING failed. hr=" << hr;
+			return 1;
+		}
+		hr = m_transform->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, NULL);
+		if (FAILED(hr))
+		{
+			PLOG(plog::error) << L"MFT_MESSAGE_NOTIFY_START_OF_STREAM failed. hr=" << hr;
+			return 1;
+		}
+		m_closed = true;
+		m_encoderThread = std::thread(&CMFEncoder::EncodeThread, this);
+		return 0;
+	}
+
+	void CMFEncoder::EncodeThread()
+	{
+		HRESULT hr;
+		bool throttle = false;
+		UINT32 interlaceMode;
+		PLOG(plog::info) << L"CMFEncoder::EncodeThread start";
+		//   m_frameTime = 1000.0 / m_encoderParam->deskEncodeParam->frameRate;
+		m_frameTime = 1000.0 / m_encoderParam->fps;
+		clock_t  startClock = clock();
+		clock_t  startClickClock = clock();
+		long     tGap = 0;
+		long     currTime = 0;
+		int      iSleep = 0;
+		unsigned long long mtimesstamp = 0;
+		static int icount = 0;
+		static int itmp = 0;
+
+
+		while (!m_closed.load())
+		{
+			winrt::com_ptr<IMFMediaEvent> event;
+			if (m_eventGen == nullptr)
+			{
+				break;
+			}
+			hr = m_eventGen->GetEvent(0, event.put());
+			if (FAILED(hr))
+			{
+				PLOG(plog::error) << L"m_eventGen->GetEvent failed. hr=" << hr;
+				continue;
+			}
+			MediaEventType eventType;
+			hr = event->GetType(&eventType);
+			if (FAILED(hr))
+			{
+				PLOG(plog::error) << L"event->GetType failed. hr=" << hr;
+				continue;
+			}
+			if (m_closed.load())
+			{
+				break;
+			}
+			switch (eventType)
+			{
+			case METransformNeedInput:
+				{
+					m_eventCbFunc(EncodeEvent::NeedInput);	//向capture请求一帧
+					winrt::com_ptr<IMFMediaBuffer> inputBuffer;
+					
+					winrt::com_ptr<ID3D11Texture2D> texture2D = nullptr;
+					while (!m_closed.load())
+					{
+						std::lock_guard<std::mutex> lock(m_d3d11textureLock);
+						if (m_d3d11texture)
+						{
+							texture2D = m_d3d11texture;
+							break;
+						}
+					}
+
+					D3D11_TEXTURE2D_DESC desc;
+					m_d3d11texture->GetDesc(&desc);
+
+					hr = m_colorConv->Convert(texture2D.get(), scaleTexture.get(), desc.Width, desc.Height, 0, 0);
+					if (FAILED(hr))
+					{
+						PLOG(plog::error) << L"convert exception hr=" << hr;
+						break;
+					}
+
+					hr = MFCreateDXGISurfaceBuffer(__uuidof(ID3D11Texture2D), scaleTexture.get(), 0, FALSE, inputBuffer.put());
+					if (FAILED(hr))
+					{
+						PLOG(plog::error) << L"MFCreateDXGISurfaceBuffer exception hr=" << hr;
+						break;
+					}
+
+					winrt::com_ptr<IMFSample> sample;
+					hr = MFCreateSample(sample.put());
+					hr = sample->AddBuffer(inputBuffer.get());
+					if (m_transform)
+					{
+						hr = m_transform->ProcessInput(m_inputStreamID, sample.get(), 0);
+						if (FAILED(hr))
+						{
+							PLOG(plog::error) << L"ProcessInput failed. hr=" << hr;
+						}
+					}
+				}
+				break;
+
+			case METransformHaveOutput:
+				{
+					DWORD status;
+					MFT_OUTPUT_DATA_BUFFER outputBuffer;
+					outputBuffer.dwStreamID = m_outputStreamID;
+					outputBuffer.pSample = nullptr;
+					outputBuffer.dwStatus = 0;
+					outputBuffer.pEvents = nullptr;
+
+					winrt::com_ptr<IMFMediaBuffer> pBuffer = NULL;
+					BYTE* pData;
+					hr = m_transform->ProcessOutput(0, 1, &outputBuffer, &status);
+					DWORD maxvalue = 0;
+					DWORD curr = 0;
+					if (outputBuffer.pSample)
+					{
+						outputBuffer.pSample->GetBufferByIndex(0, pBuffer.put());
+						mtimesstamp = GetTickCount() * 1000000;
+						hr = pBuffer->Lock(&pData, &maxvalue, &curr);
+						if (SUCCEEDED(hr))
+						{
+							bool biskey = false;
+							biskey = IsIDRSample(pData, curr);
+							m_callbackFun(pData, curr, mtimesstamp, true, biskey, 0, m_pArg);
+							pBuffer->Unlock();
+						}
+					}
+
+					if (outputBuffer.pSample)
+						outputBuffer.pSample->Release();
+					if (outputBuffer.pEvents)
+						outputBuffer.pEvents->Release();
+					currTime = clock();
+					tGap = currTime - startClock;
+					if (tGap < m_frameTime)
+					{
+						iSleep = m_frameTime - tGap;
+						sleepE(m_frameTime - tGap);
+					}
+
+					icount++;
+					if (currTime - startClickClock > 10000)
+					{
+						PLOG(plog::info) << L"frame = " << icount / 10;
+						icount = 0;
+						startClickClock = currTime;
+					}
+					startClock = clock();
+				}
+				break;
+			default:
+				break;
+			}
+
+		}
+		if (m_colorConv)
+		{
+			m_colorConv->Cleanup();
+			m_colorConv = nullptr;
+		}
+		PLOG(plog::info) << L"CMFEncoder::EncodeThread end";
+	}
+
+	//todo: 有更好的方法，SUCCEEDED(outputBuffer.pSample->GetUINT32(MFSampleExtension_VideoEncodePictureType, &picType)))
+	bool CMFEncoder::IsIDRSample(unsigned char* data, int len)
+	{
+		int istart = 0;
+		unsigned char* pData = data;
+		unsigned char btStartCode[4] = { 0x00, 0x00, 0x00, 0x01 };
+		unsigned char btStartCode2[3] = { 0x00, 0x00, 0x01 };
+		bool  bIdr = false;
+		while (istart++ < len - 4)
+		{
+			if (memcmp(pData, btStartCode2, sizeof(btStartCode2)) == 0 && ((pData[3] & 0x0F) == 5))
+			{
+				bIdr = true;
+				break;
+			}
+			else if (memcmp(pData, btStartCode, sizeof(btStartCode)) == 0 && ((pData[4] & 0x0F) == 5))
+			{
+				bIdr = true;
+				break;
+			}
+			pData++;
+		}
+		return bIdr;
+	}
+
+	void CMFEncoder::RecordFileFun()
+	{
+		int frameCount = 0;
+		while (m_bRecord)
+		{
+			if (m_videoList.size() == 0 && m_audioInList.size() == 0)
+			{
+				Sleep(10);
+			}
+			if (m_videoList.size() > 0)
+			{
+				EnterCriticalSection(&(m_cs));
+				st_video frame = m_videoList.front();
+				m_videoList.pop_front();
+				LeaveCriticalSection(&(m_cs));
+				m_mp4Encoder.WriteH264Data(m_recordInfo.mp4Handle, frame.pdata, frame.len, frame.uiTime);
+
+				frameCount++;
+				if (frame.pdata)
+				{
+					delete[] frame.pdata;
+				}
+
+			}
+
+			if (m_audioInList.size() > 0)
+			{
+				m_audioInLock.lock();
+				st_audio frame = m_audioInList.front();
+				m_audioInList.pop_front();
+				m_audioInLock.unlock();
+				m_mp4Encoder.WreiteAACData(m_recordInfo.mp4Handle, m_recordInfo.mp4AudioInTrack, frame.pdata, frame.len);
+
+				if (frame.pdata)
+				{
+					delete[] frame.pdata;
+				}
+
+			}
+
+			if (m_audioOutList.size() > 0)
+			{
+				m_audioOutLock.lock();
+				st_audio frame = m_audioOutList.front();
+				m_audioOutList.pop_front();
+				m_audioOutLock.unlock();
+				m_mp4Encoder.WreiteAACData(m_recordInfo.mp4Handle, m_recordInfo.mp4AudioOutTrack, frame.pdata, frame.len);
+
+				if (frame.pdata)
+				{
+					delete[] frame.pdata;
+				}
+
+			}
+		}
+		PLOG(plog::info) << L"StopRecord:" << frameCount;
+	}
+
+	void CMFEncoder::StopEncoder()
+	{
+		PLOG(plog::info) << L"CMFEncoder::StopEncoder";
+		m_closed = true;
+		if (m_encoderThread.joinable())
+		{
+			m_encoderThread.join();
+		}
+		HRESULT hr;
+		if (m_transform)
+		{
+			hr = m_transform->ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, NULL);
+			hr = m_transform->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, NULL);
+			hr = m_transform->ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, NULL);
+			hr = m_transform->ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, NULL);
+		}
+		if (mpCodecAPI)
+		{
+			mpCodecAPI->Release();
+			mpCodecAPI = nullptr;
+		}
+		if (m_transform)
+		{
+			m_transform->Release();
+			m_transform = nullptr;
+		}
+		if (m_mfActive)
+		{
+			m_mfActive->ShutdownObject();
+			m_mfActive = nullptr;
+		}
+#if 0
+		StopAudioCapture();
+#endif
+		while (m_videoList.size() > 0)
+		{
+			st_video frame = m_videoList.front();
+			if (frame.pdata)
+			{
+				delete[] frame.pdata;
+			}
+			m_videoList.pop_front();
+		}
+	}
 }

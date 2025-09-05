@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "SimpleCapture.h"
+#include "shiwj/ShiwjCommon.h"
 
 namespace winrt
 {
@@ -70,6 +71,12 @@ void SimpleCapture::StartCapture()
 {
     CheckClosed();
     m_session.StartCapture();
+
+    //init encoder
+    m_encoder = std::make_unique<shiwj::CMFEncoder>();
+    uint64_t ts = shiwj::GetCurrentTimestampMilli();
+    std::string videoFilePath = shiwj::Wstring2Utf8String(shiwj::GetVideoPath() + L"\\" + std::to_wstring(ts) + L".mp4");
+    m_encoder->Init([this](shiwj::EncodeEvent e) {EncodeEventCallback(e);}, m_device, 1920, 1080,30, videoFilePath.c_str(), false, false);
 }
 
 winrt::ICompositionSurface SimpleCapture::CreateSurface(winrt::Compositor const& compositor)
@@ -100,6 +107,10 @@ void SimpleCapture::Close()
         m_framePool = nullptr;
         m_session = nullptr;
         m_item = nullptr;
+
+        //close encoder
+        m_encoder->Close();
+        m_encoder = nullptr;
     }
 }
 
@@ -162,6 +173,13 @@ void SimpleCapture::OnFrameArrived(winrt::Direct3D11CaptureFramePool const& send
 
     {
         auto frame = sender.TryGetNextFrame();
+
+        //cache frame for encode
+        {
+            std::lock_guard<std::mutex>  lg(m_frameCacheMutex);
+            m_frameCache = frame;
+        }
+
 		swapChainResizedToFrame = TryResizeSwapChain(frame);    //resize是由目标窗口大小变化引起的，只能由frame来检测
 
         winrt::com_ptr<ID3D11Texture2D> backBuffer;
@@ -270,4 +288,16 @@ void SimpleCapture::OnFrameArrived(winrt::Direct3D11CaptureFramePool const& send
     {
         m_framePool.Recreate(m_device, m_pixelFormat, 2, m_lastSize);
     }
+}
+
+void SimpleCapture::EncodeEventCallback(shiwj::EncodeEvent e)
+{
+    std::lock_guard<std::mutex>  lg(m_frameCacheMutex);
+    if (m_frameCache != nullptr)
+    {
+        auto texture = GetDXGIInterfaceFromObject<ID3D11Texture2D>(m_frameCache.Surface());
+        auto result = util::CopyD3DTexture(m_d3dDevice, texture, true);
+        m_encoder->EncodeFrame(result);
+    }
+    return;
 }

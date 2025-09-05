@@ -58,5 +58,8 @@
     <Filter Include="shiwj">
       <UniqueIdentifier>{fad4dc5b-1c36-4a0c-9879-d63d406324f6}</UniqueIdentifier>
     </Filter>
+    <Filter Include="shiwj\audio">
+      <UniqueIdentifier>{b6602a58-80db-4dd5-bcb5-4375cad774b5}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
 </Project>

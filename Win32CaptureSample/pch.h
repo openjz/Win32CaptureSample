@@ -68,3 +68,5 @@
 #include <robmikh.common/hwnd.interop.h>
 #include <robmikh.common/ControlsHelper.h>
 #include <robmikh.common/wicHelpers.h>
+
+#include "mp4v2/mp4v2.h"

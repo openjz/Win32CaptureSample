@@ -1,7 +1,9 @@
-#include "pch.h"
-#include "MP4Encoder.h"
-#include <string.h>
+#include "../pch.h"
+#include <cstring>
 #include <Windows.h>
+#include "MP4Encoder.h"
+
+#include "ShiwjCommon.h"
 #define BUFFER_SIZE  (1024*1024 *10)
 
 static int GetSRIndex(unsigned int sampleRate)
@@ -34,7 +36,7 @@ static short getAudioConfig(unsigned int sampleRate, unsigned int channels)
 
 	return (LOW << 11) | (GetSRIndex(sampleRate) << 7) | (channels << 3);
 }
-#pragma comment(lib, "lib/libmp4v2.lib")
+//#pragma comment(lib, "lib/libmp4v2.lib")
 MP4Encoder::MP4Encoder(void) :
 	m_videoId(NULL),
 	m_nWidth(0),
@@ -60,7 +62,7 @@ MP4FileHandle MP4Encoder::OpenMP4File(const char* fileName)
 	MP4FileHandle hMp4file = MP4Modify(fileName);
 	if (hMp4file == MP4_INVALID_FILE_HANDLE)
 	{
-		LOG_INFO(L"ERROR:Open file fialed.\n");
+		PLOG(plog::error) << L"Open file failed, file:" << fileName;
 		return 0;
 	}
 	return hMp4file;
@@ -77,7 +79,7 @@ MP4FileHandle MP4Encoder::CreateMP4File(const char *pFileName, int width, int he
 
 	if (hMp4file == MP4_INVALID_FILE_HANDLE)
 	{
-		LOG_INFO(L"ERROR:Open file fialed.\n");
+		PLOG(plog::error) << L"Open file failed, file:" << pFileName;
 		return 0;
 	}
 	m_nWidth = width;
@@ -103,7 +105,7 @@ bool MP4Encoder::Write264Metadata(MP4FileHandle hMp4File, LPMP4ENC_Metadata lpMe
 		3);           // 4 bytes length before each NAL unit
 	if (m_videoId == MP4_INVALID_TRACK_ID)
 	{
-		LOG_INFO(L"add video track failed.\n");
+		PLOG(plog::error) << L"add video track failed.\n";
 		return false;
 	}
 	MP4SetVideoProfileLevel(hMp4File, 0x01); //  Simple Profile @ Level 3
@@ -123,7 +125,7 @@ MP4TrackId MP4Encoder::WriteAACMetadata(MP4FileHandle hMp4File,uint32_t audio_sa
 		MP4_MPEG4_AUDIO_TYPE);
 	if (audioTrackId == MP4_INVALID_TRACK_ID)
 	{
-		LOG_INFO(L"add aac audio track error!\n");
+		PLOG(plog::error) << L"add aac audio track error!\n";
 		return MP4_INVALID_TRACK_ID;
 	}
 	MP4SetAudioProfileLevel(hMp4File, 0x1); // 0x02 ==> MPEG4 AAC LC
@@ -181,7 +183,7 @@ int MP4Encoder::WriteH264Data(MP4FileHandle hMp4File, const unsigned char* pData
 					3);           // 4 bytes length before each NAL unit
 				if (m_videoId == MP4_INVALID_TRACK_ID)
 				{
-					LOG_INFO(L"add video track failed.\n");
+					PLOG(plog::error) << L"add video track failed.\n";
 					return 0;
 				}
 				MP4SetVideoProfileLevel(hMp4File, 1); //  Simple Profile @ Level 3

@@ -70,33 +70,20 @@ namespace shiwj {
 
     int CreateFoldersRecursive(std::wstring const& fullPath)
     {
-        std::filesystem::path path(fullPath);
-
-        PLOG(plog::debug) << L"Try to create folder :" << fullPath;
-        // 获取根目录
-        winrt::StorageFolder currentFolder = winrt::StorageFolder::GetFolderFromPathAsync(
-            path.root_path().wstring()).get();
-
-        // 逐级创建目录
-        for (auto const& part : path.relative_path())
+        if (fullPath.empty())
         {
-            try
+            return 1;
+        }
+        std::error_code ec;
+        if (!std::filesystem::exists(fullPath))
+        {
+            // create_directories: 递归创建
+            bool ret = std::filesystem::create_directories(fullPath, ec);
+            if (!ret)
             {
-                std::wstring partName = part.wstring();
-                currentFolder = currentFolder.GetFolderAsync(partName).get();
-            }
-            catch (winrt::hresult_error const& ex)
-            {
-                // 判断是否为目录未找到错误
-                if (ex.code() == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND))
-                {
-                    currentFolder = currentFolder.CreateFolderAsync(part.wstring()).get();
-                }
-                else
-                {
-                    PLOG(plog::debug) << L"Create folder failed:" << currentFolder.Path();
-                    return 1;
-                }
+                PLOG(plog::debug) << L"[CreateFoldersRecursive] failed: "
+                    << fullPath << L" ec=" << ec.value() << L" msg="
+                    << shiwj::Utf8String2Wstring(std::system_category().message(ec.value()));
             }
         }
         return 0;
@@ -236,13 +223,20 @@ namespace shiwj {
         }
         return wstrRet;
     }
-}
 
-uint64_t GetCurrentTimestampMicro()
-{
-    std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
-    uint64_t timestampMicro = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
-    return timestampMicro;
+    uint64_t GetCurrentTimestampMicro()
+    {
+        std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
+        uint64_t timestampMicro = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+        return timestampMicro;
+    }
+
+    uint64_t GetCurrentTimestampMilli()
+    {
+        std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
+        uint64_t timestampMilli = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+        return timestampMilli;
+    }
 }
 
 int WriteBinaryToFile(
@@ -270,9 +264,3 @@ int WriteBinaryToFile(
     }
 }
 
-uint64_t GetCurrentTimestampMilli()
-{
-    std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
-    uint64_t timestampMilli = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-    return timestampMilli;
-}

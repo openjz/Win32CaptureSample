@@ -1,6 +1,8 @@
 #pragma once
 #include "DirtyRegionVisualizer.h"
 
+#include "shiwj/ShiwjEncoder.h"
+
 class SimpleCapture
 {
 public:
@@ -76,4 +78,11 @@ private:
 
     std::shared_ptr<DirtyRegionVisualizer> m_dirtyRegionVisualizer;
     std::atomic<bool> m_visualizeDirtyRegions = false;
+//shiwj
+private:
+    void EncodeEventCallback(shiwj::EncodeEvent e);
+    std::unique_ptr<shiwj::CMFEncoder> m_encoder{ nullptr };
+
+    std::mutex m_frameCacheMutex;
+    winrt::Windows::Graphics::Capture::Direct3D11CaptureFrame m_frameCache{ nullptr };
 };
