@@ -1,5 +1,7 @@
 #pragma once
 #include "../pch.h"
+#include <mfapi.h>
+#include <mftransform.h>
 #include "thirdparty/plog/Log.h"
 #include "thirdparty/plog/Initializers/RollingFileInitializer.h"
 
@@ -25,6 +27,11 @@ namespace shiwj{
 	uint64_t GetCurrentTimestampMicro();
 
 	uint64_t GetCurrentTimestampMilli();
+
+	//media foundation
+	void PrintMFAttributes(IMFAttributes* pAttr);
+
+	std::wstring GetMFAttributeName(const winrt::guid& guid);
 }
 
 int WriteBinaryToFile(winrt::Windows::Storage::StorageFile& file, winrt::array_view<uint8_t> data);

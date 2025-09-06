@@ -75,8 +75,8 @@ void SimpleCapture::StartCapture()
     //init encoder
     m_encoder = std::make_unique<shiwj::CMFEncoder>();
     uint64_t ts = shiwj::GetCurrentTimestampMilli();
-    std::string videoFilePath = shiwj::Wstring2Utf8String(shiwj::GetVideoPath() + L"\\" + std::to_wstring(ts) + L".mp4");
-    m_encoder->Init([this](shiwj::EncodeEvent e) {EncodeEventCallback(e);}, m_device, 1920, 1080,30, videoFilePath.c_str(), false, false);
+    std::string videoFilePath = shiwj::Wstring2Utf8String(shiwj::GetVideoPath() + std::to_wstring(ts) + L".mp4");
+    m_encoder->Start([this](shiwj::EncodeEvent e) {EncodeEventCallback(e);}, m_device, 1920, 1080,30, videoFilePath.c_str(), false, false);
 }
 
 winrt::ICompositionSurface SimpleCapture::CreateSurface(winrt::Compositor const& compositor)
@@ -296,7 +296,19 @@ void SimpleCapture::EncodeEventCallback(shiwj::EncodeEvent e)
     if (m_frameCache != nullptr)
     {
         auto texture = GetDXGIInterfaceFromObject<ID3D11Texture2D>(m_frameCache.Surface());
-        auto result = util::CopyD3DTexture(m_d3dDevice, texture, true);
+        winrt::com_ptr<ID3D11Texture2D> result;
+
+        //copy texture to result
+        //这里必须使用D3D11_BIND_RENDER_TARGET这个纹理绑定类型，否则在后续CreateVideoProcessorInputView 时会出错
+        D3D11_TEXTURE2D_DESC desc = {};
+        texture->GetDesc(&desc);
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+        desc.CPUAccessFlags = 0;
+        desc.MiscFlags = 0;
+        winrt::check_hresult(m_d3dDevice->CreateTexture2D(&desc, nullptr, result.put()));
+        m_d3dContext->CopyResource(result.get(), texture.get());
+
         m_encoder->EncodeFrame(result);
     }
     return;

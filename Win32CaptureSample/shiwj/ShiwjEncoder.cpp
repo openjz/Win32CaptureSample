@@ -24,41 +24,23 @@ namespace shiwj
 
 	CMFEncoder::~CMFEncoder()
 	{
-		Close();
+		if (m_closed == false)
+		{
+			Close();
+		}
 	}
 
-	int CMFEncoder::Init(EventCBFunc eventCbFunc, 
+	int CMFEncoder::Start(EventCBFunc eventCbFunc,
 		winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice device,
 		int width, int height, int fps, const char* filePath, bool inputAudio, bool outputAudio)
 	{
 		PLOG(plog::info) << L"CMFEncoder::Init, width:" << width << L" height:" << height << L" fps:" << fps << L" filepath:" << filePath;
-		m_eventCbFunc = eventCbFunc;
 		
-		InitializeCriticalSection(&(m_cs));
-		m_encoderParam = std::make_unique<EncoderParam>();
-
-		HRESULT hr = MFStartup(MF_VERSION);
-
-		hr = MFCreateDXGIDeviceManager(&m_resetToken, m_deviceManager.put());
-		if (FAILED(hr))
-		{
-			PLOG(plog::error) << L"MFCreateDXGIDeviceManager failed. " << hr;
-			return 1;
-		}
-
+		m_eventCbFunc = eventCbFunc;
 		m_device = device;
 		m_d3dDevice = GetDXGIInterfaceFromObject<ID3D11Device>(device);
 		m_d3dDevice->GetImmediateContext(m_d3dContext.put());
-
-		//将d3d设备绑定到 mf dxgi device manager
-		auto dxgiDevice = m_d3dDevice.as<IDXGIDevice>();
-		hr = m_deviceManager->ResetDevice(dxgiDevice.get(), m_resetToken);
-
-		m_writeMp4Event = CreateEvent(NULL, FALSE, FALSE, NULL);
-		PLOG(plog::info) << L"DeskCapEncoder create hr=" << hr;
-
-		//start encode
-		int ret = 0;
+		m_encoderParam = std::make_unique<EncoderParam>();
 
 		m_recordInfo.width = width;
 		m_recordInfo.height = height;
@@ -73,6 +55,36 @@ namespace shiwj
 		m_encoderParam->gop = fps * 1000;
 		m_encoderParam->bitRate = 10000000;
 		m_encoderParam->quality = 50;
+
+		InitializeCriticalSection(&(m_cs));
+
+		HRESULT hr = MFStartup(MF_VERSION);
+		if (FAILED(hr))
+		{
+			PLOG(plog::error) << "MFStartup failed. hr: 0x" << std::hex << hr << std::dec;
+			return 1;
+		}
+
+		hr = MFCreateDXGIDeviceManager(&m_resetToken, m_deviceManager.put());
+		if (FAILED(hr))
+		{
+			PLOG(plog::error) << L"MFCreateDXGIDeviceManager failed. hr: 0x" << std::hex << hr <<std::dec;
+			return 1;
+		}
+
+		//将dxgi设备绑定到 mf dxgi device manager
+		auto dxgiDevice = m_d3dDevice.as<IDXGIDevice>();
+		hr = m_deviceManager->ResetDevice(dxgiDevice.get(), m_resetToken);
+		if(FAILED(hr))
+		{
+			PLOG(plog::error) << L"IMFDXGIDeviceManager::ResetDevice failed. hr: 0x" << std::hex << hr << std::dec;
+			return 1;
+		}
+
+		PLOG(plog::info) << L"DeskCapEncoder create hr=" << hr;
+
+		//start encode
+		int ret = 0;
 
 		ret = CreateEncoder();
 
@@ -163,20 +175,13 @@ namespace shiwj
 		StopEncoder();
 
 		DeleteCriticalSection(&m_cs);
-		StopEncoder();
 
 		HRESULT hr;
 		hr = MFShutdown();
 		PLOG(plog::info) << L"MFShutdown =" << hr;
-		CloseHandle(m_writeMp4Event);
 
 		if (m_deviceManager) {
-			m_deviceManager->Release();
 			m_deviceManager = nullptr;
-		}
-		if (m_writeMp4Event) {
-			CloseHandle(m_writeMp4Event);
-			m_writeMp4Event = NULL;
 		}
 	}
 
@@ -187,6 +192,7 @@ namespace shiwj
 		m_colorConv = std::make_unique<RGBToNV12>(m_d3dDevice.get(), m_d3dContext.get());
 		HRESULT hr = m_colorConv->Init();
 
+		//枚举并激活编码器
 		CComHeapPtr<IMFActivate*> activateRaw;
 		UINT32 activateCount = 0;
 
@@ -207,29 +213,29 @@ namespace shiwj
 		);
 		if (FAILED(hr))
 		{
-			PLOG(plog::error) << L"MFTEnumEx failed:" << hr;
+			PLOG(plog::error) << L"MFTEnumEx failed, hr: 0x" << std::hex << hr <<std::dec;
 			return 1;
 		}
 
+		PLOG(plog::info) << L"MFTEnumEx, enum count=" << activateCount;
 		if (activateCount == 0)
 		{
-			PLOG(plog::error) << L"activateCount == 0";
+			PLOG(plog::error) << L"MFTEnumEx, activate count is 0";
 			return 1;
 		}
 		bool bactive = false;
 
 		for (UINT32 i = 0; i < activateCount; i++)
 		{
+			PLOG(plog::info) << L"======> Activate object [" << i << L"] attributes:";
+			shiwj::PrintMFAttributes(activateRaw[i]);
 			if (!bactive)
 			{
-				//hr = activateRaw[i]->ActivateObject(IID_PPV_ARGS(m_transform.put()));
 				hr = activateRaw[i]->ActivateObject(winrt::guid_of<IMFTransform>(), m_transform.put_void());
-
 				if (SUCCEEDED(hr))
 				{
 					bactive = true;
-					*(m_mfActive.put()) = activateRaw[i];
-					break;
+					m_mfActive.copy_from(activateRaw[i]);
 				}
 			}
 		}
@@ -238,57 +244,77 @@ namespace shiwj
 			activateRaw[i]->Release();
 		}
 
-		PLOG(plog::info) << L"h264 encoder enum count=" << activateCount << L",active=" << bactive;
 		if (!bactive) {
 			PLOG(plog::error) << L"ActivateObject failed." << hr;
 			return 1;
 		}
 
 		winrt::com_ptr<IMFAttributes> attributes;
-		hr = m_transform->GetAttributes(attributes.put());
-		hr = attributes->SetUINT32(MF_TRANSFORM_ASYNC_UNLOCK, TRUE);
-		m_eventGen = m_transform.as<IMFMediaEventGenerator>();
+		m_transform->GetAttributes(attributes.put());
+		PLOG(plog::info) << L"======> m_transform attributes(default)";
+		shiwj::PrintMFAttributes(attributes.get());
 
+		//m_transform默认具有MF_TRANSFORM_ASYNC属性
+		//必须 和MF_TRANSFORM_ASYNC_UNLOCK相配合使用
+		hr = attributes->SetUINT32(MF_TRANSFORM_ASYNC_UNLOCK, TRUE);
+
+		//获取编码器输入输出流ID
+		//先设置MF_TRANSFORM_ASYNC_UNLOCK，才能成功获取流ID
 		hr = m_transform->GetStreamIDs(1, &m_inputStreamID, 1, &m_outputStreamID);
 		if (hr == E_NOTIMPL)
 		{
 			m_inputStreamID = 0;
 			m_outputStreamID = 0;
-			hr = S_OK;
 		}
 
-		//hr = m_transform->QueryInterface(IID_PPV_ARGS(&mpCodecAPI));
-		hr = m_transform->QueryInterface(winrt::guid_of<ICodecAPI>(), mpCodecAPI.put_void());
-
-		hr = m_transform->ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, reinterpret_cast<ULONG_PTR>(m_deviceManager.get()));
-		if (FAILED(hr)) {
-			return 1;
-		}
-		PLOG(plog::info) << L"ProcessMessage ok";
 		hr = attributes->SetUINT32(MF_LOW_LATENCY, TRUE);
 		if (FAILED(hr))
 		{
 			PLOG(plog::error) << L"Attributes SetUINT32 MF_LOW_LATENCY failed, hr:" << hr;
 			return 1;
 		}
-		ret = SetInputOutPut();
+
+		PLOG(plog::info) << L"======> m_transform attributes(final)";
+		shiwj::PrintMFAttributes(attributes.get());
+
+		//https://learn.microsoft.com/zh-cn/windows/win32/api/mftransform/ne-mftransform-mft_message_type
+		//必须在 SetInputType 或 SetOutputType 之前调用。
+		hr = m_transform->ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, reinterpret_cast<ULONG_PTR>(m_deviceManager.get()));
+		if (FAILED(hr)) {
+			PLOG(plog::error) << L"ProcessMessage MFT_MESSAGE_SET_D3D_MANAGER failed. hr: 0x" << std::hex << hr <<std::dec;
+			return 1;
+		}
+
+		//设置输入输出参数
+		//必须先设置outputType，再设置inputType
+		ret = SetOutputType();
+		if (ret != 0) {
+			PLOG(plog::error) << L"SetOutputType failed, ret:" << ret;
+			return ret;
+		}
+		ret = SetInputType();
 		if (ret != 0) {
 			PLOG(plog::error) << L"SetInputOutPut failed, ret:" << ret;
 			return ret;
 		}
 
+		m_eventGen = m_transform.as<IMFMediaEventGenerator>();
+
+		//设置编码参数
+		m_codecAPI = m_transform.as<ICodecAPI>();
+
 		VARIANT var = { 0 };
 		var.vt = VT_UI4;
 		var.lVal = m_encoderParam->gop;
-		hr = mpCodecAPI->SetValue(&CODECAPI_AVEncMPVGOPSize, &var);
+		hr = m_codecAPI->SetValue(&CODECAPI_AVEncMPVGOPSize, &var);
 		if (FAILED(hr))
 		{
 			PLOG(plog::error) << L"mpCodecAPI SetValue CODECAPI_AVEncMPVGOPSize failed. hr:" << hr;
 			return 1;
 		}
 
-		var.lVal = eAVEncCommonRateControlMode_Quality;  //eAVEncCommonRateControlMode_Quality eAVEncCommonRateControlMode_UnconstrainedVBR
-		hr = mpCodecAPI->SetValue(&CODECAPI_AVEncCommonRateControlMode, &var);
+		var.lVal = eAVEncCommonRateControlMode_Quality;
+		hr = m_codecAPI->SetValue(&CODECAPI_AVEncCommonRateControlMode, &var);
 		if (FAILED(hr))
 		{
 			PLOG(plog::error) << L"mpCodecAPI SetValue CODECAPI_AVEncCommonRateControlMode failed. hr:" << hr;
@@ -296,7 +322,7 @@ namespace shiwj
 		}
 
 		var.lVal = m_encoderParam->quality;
-		hr = mpCodecAPI->SetValue(&CODECAPI_AVEncCommonQuality, &var);
+		hr = m_codecAPI->SetValue(&CODECAPI_AVEncCommonQuality, &var);
 		if (FAILED(hr))
 		{
 			PLOG(plog::error) << L"mpCodecAPI SetValue CODECAPI_AVEncCommonQuality failed. hr:" << hr;
@@ -311,7 +337,7 @@ namespace shiwj
 		desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
 #endif
 		desc.Width = m_encoderParam->width;
-		desc.Height = m_encoderParam->height;//m_encoderParam->height;
+		desc.Height = m_encoderParam->height;
 		desc.MipLevels = 1;
 		desc.ArraySize = 1;
 		desc.SampleDesc.Count = 1;
@@ -330,74 +356,18 @@ namespace shiwj
 		return 0;
 	}
 
-	int CMFEncoder::SetInputOutPut() {
-		int ret = 0;
-		ret = SetOutputType();
-		if (ret != 0) {
-			return ret;
-		}
-		ret = SetInputType();
-		return ret;
-	}
-
-	int CMFEncoder::SetInputType()
-	{
-		UINT32 width;
-		UINT32 height;
-		HRESULT hr;
-		winrt::com_ptr<IMFMediaType> inputType;
-		hr = m_transform->GetInputAvailableType(m_inputStreamID, 0, inputType.put());
-		MFGetAttributeSize(inputType.get(), MF_MT_FRAME_SIZE, &width, &height);
-		if (FAILED(hr))
-		{
-			PLOG(plog::error) << L"MFCreateMediaType failed." << hr;
-			return 1;
-		}
-
-		hr = inputType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
-		if (FAILED(hr))
-		{
-			PLOG(plog::error) << L"SetGUID, MF_MT_MAJOR_TYPE, MFMediaType_Video, failed." << hr;
-			return 1;
-		}
-#ifdef CODE_H265
-		hr = inputType->SetGUID(MF_MT_SUBTYPE, m_bIsInvada || m_bIsAmd ? MFVideoFormat_NV12 : MFVideoFormat_ARGB32);  // m_bIsAmd?MFVideoFormat_NV12: MFVideoFormat_ARGB32  m_bIsAmd?MFVideoFormat_NV12: MFVideoFormat_ARGB32  MFVideoFormat_ARGB32  MFVideoFormat_NV12
-#else
-		hr = inputType->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_ARGB32);
-		if (FAILED(hr))
-		{
-			PLOG(plog::error) << L"SetGUID, MF_MT_SUBTYPE, MFVideoFormat_ARGB32, failed." << hr;
-			return 1;
-		}
-#endif
-		PLOG(plog::info) << L"inputType width= " << width << L", height=" << height;
-
-#ifdef CODE_H265
-		//  inputType->SetUINT32(MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_Normal);
-#endif
-		PLOG(plog::info) << L"MFSetAttributeRatio fps:" << m_encoderParam->fps;
-		hr = MFSetAttributeRatio(inputType.get(), MF_MT_FRAME_RATE, m_encoderParam->fps, 1);
-		if (FAILED(hr))
-		{
-			PLOG(plog::error) << L"MFSetAttributeRatio,MF_MT_FRAME_RATE, failed." << hr;
-			return 1;
-		}
-
-		hr = m_transform->SetInputType(m_inputStreamID, inputType.get(), 0);
-		if (FAILED(hr))
-		{
-			PLOG(plog::error) << L"SetInputType failed." << hr;
-			return 1;
-		}
-		return 0;
-	}
-
 	int CMFEncoder::SetOutputType()
 	{
 		HRESULT hr;
 		winrt::com_ptr<IMFMediaType> outputType;
-
 		hr = m_transform->GetOutputAvailableType(m_outputStreamID, 0, outputType.put());
+		if (FAILED(hr))
+		{
+			PLOG(plog::error) << L"SetOutputType, GetOutputAvailableType failed hr:" << std::hex << hr << std::dec;
+			return 1;
+		}
+		PLOG(plog::info) << L"======> Output type attributes(default):";
+		shiwj::PrintMFAttributes(outputType.get());
 
 		hr = outputType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
 		if (FAILED(hr))
@@ -405,16 +375,16 @@ namespace shiwj
 			PLOG(plog::error) << L"SetGUID, MF_MT_MAJOR_TYPE, MFMediaType_Video failed, hr=" << hr;
 			return 1;
 		}
-		hr = outputType->SetUINT32(MF_MT_VIDEO_PROFILE, eAVEncH264VProfile_Main);
-		if (FAILED(hr))
-		{
-			PLOG(plog::error) << L"SetUINT32, MF_MT_VIDEO_PROFILE, eAVEncH264VProfile_Main failed, hr=" << hr;
-			return 1;
-		}
 		hr = outputType->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_H264);
 		if (FAILED(hr))
 		{
 			PLOG(plog::error) << L"SetGUID, MF_MT_SUBTYPE, MFVideoFormat_H264, failed." << hr;
+			return 1;
+		}
+		hr = outputType->SetUINT32(MF_MT_VIDEO_PROFILE, eAVEncH264VProfile_Main);
+		if (FAILED(hr))
+		{
+			PLOG(plog::error) << L"SetUINT32, MF_MT_VIDEO_PROFILE, eAVEncH264VProfile_Main failed, hr=" << hr;
 			return 1;
 		}
 		hr = outputType->SetUINT32(MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT601);
@@ -453,6 +423,66 @@ namespace shiwj
 			PLOG(plog::error) << L"SetOutputType failed, hr=" << hr;
 			return 1;
 		}
+		PLOG(plog::info) << L"======> Output type attributes(final):";
+		shiwj::PrintMFAttributes(outputType.get());
+		return 0;
+	}
+
+	int CMFEncoder::SetInputType()
+	{
+		HRESULT hr;
+		winrt::com_ptr<IMFMediaType> inputType;
+		hr = m_transform->GetInputAvailableType(m_inputStreamID, 0, inputType.put());
+		if (FAILED(hr))
+		{
+			PLOG(plog::error) << L"SetInputType, GetInputAvailableType failed." << hr;
+			return 1;
+		}
+		PLOG(plog::info) << L"======> Input type attributes(default):";
+		shiwj::PrintMFAttributes(inputType.get());
+
+		MFSetAttributeSize(inputType.get(), MF_MT_FRAME_SIZE, m_encoderParam->width, m_encoderParam->height);
+		if (FAILED(hr))
+		{
+			PLOG(plog::error) << L"SetInputType failed." << hr;
+			return 1;
+		}
+
+		hr = inputType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+		if (FAILED(hr))
+		{
+			PLOG(plog::error) << L"SetGUID, MF_MT_MAJOR_TYPE, MFMediaType_Video, failed." << hr;
+			return 1;
+		}
+#ifdef CODE_H265
+		hr = inputType->SetGUID(MF_MT_SUBTYPE, m_bIsInvada || m_bIsAmd ? MFVideoFormat_NV12 : MFVideoFormat_ARGB32);  // m_bIsAmd?MFVideoFormat_NV12: MFVideoFormat_ARGB32  m_bIsAmd?MFVideoFormat_NV12: MFVideoFormat_ARGB32  MFVideoFormat_ARGB32  MFVideoFormat_NV12
+#else
+		hr = inputType->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_ARGB32);
+		if (FAILED(hr))
+		{
+			PLOG(plog::error) << L"SetGUID, MF_MT_SUBTYPE, MFVideoFormat_ARGB32, failed." << hr;
+			return 1;
+		}
+#endif
+
+#ifdef CODE_H265
+		//  inputType->SetUINT32(MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_Normal);
+#endif
+		hr = MFSetAttributeRatio(inputType.get(), MF_MT_FRAME_RATE, m_encoderParam->fps, 1);
+		if (FAILED(hr))
+		{
+			PLOG(plog::error) << L"MFSetAttributeRatio,MF_MT_FRAME_RATE, failed." << hr;
+			return 1;
+		}
+
+		hr = m_transform->SetInputType(m_inputStreamID, inputType.get(), 0);
+		if (FAILED(hr))
+		{
+			PLOG(plog::error) << L"SetInputType failed." << hr;
+			return 1;
+		}
+		PLOG(plog::info) << L"======> Input type attributes(final):";
+		shiwj::PrintMFAttributes(inputType.get());
 		return 0;
 	}
 
@@ -583,161 +613,149 @@ namespace shiwj
 			PLOG(plog::error) << L"MFT_MESSAGE_NOTIFY_START_OF_STREAM failed. hr=" << hr;
 			return 1;
 		}
-		m_closed = true;
+		m_closed = false;
 		m_encoderThread = std::thread(&CMFEncoder::EncodeThread, this);
 		return 0;
 	}
 
 	void CMFEncoder::EncodeThread()
 	{
-		HRESULT hr;
-		bool throttle = false;
-		UINT32 interlaceMode;
 		PLOG(plog::info) << L"CMFEncoder::EncodeThread start";
-		//   m_frameTime = 1000.0 / m_encoderParam->deskEncodeParam->frameRate;
-		m_frameTime = 1000.0 / m_encoderParam->fps;
+		HRESULT hr;
+		m_frameTime = 1000.0 / m_encoderParam->fps;	//每帧间隔多少ms
 		clock_t  startClock = clock();
 		clock_t  startClickClock = clock();
-		long     tGap = 0;
 		long     currTime = 0;
-		int      iSleep = 0;
-		unsigned long long mtimesstamp = 0;
+		long     tGap = 0;
 		static int icount = 0;
-		static int itmp = 0;
-
 
 		while (!m_closed.load())
 		{
-			winrt::com_ptr<IMFMediaEvent> event;
 			if (m_eventGen == nullptr)
 			{
+				PLOG(plog::error) << L"m_eventGen is null";
 				break;
 			}
+			winrt::com_ptr<IMFMediaEvent> event;
 			hr = m_eventGen->GetEvent(0, event.put());
 			if (FAILED(hr))
 			{
-				PLOG(plog::error) << L"m_eventGen->GetEvent failed. hr=" << hr;
+				PLOG(plog::error) << L"GetEvent from m_eventGen failed, hr=" << std::hex << hr <<std::dec;
 				continue;
 			}
 			MediaEventType eventType;
 			hr = event->GetType(&eventType);
 			if (FAILED(hr))
 			{
-				PLOG(plog::error) << L"event->GetType failed. hr=" << hr;
+				PLOG(plog::error) << L"Get event type failed, hr=" << std::hex << hr << std::dec;
 				continue;
 			}
-			if (m_closed.load())
+			if(eventType == METransformNeedInput)
 			{
-				break;
-			}
-			switch (eventType)
-			{
-			case METransformNeedInput:
+				PLOG(plog::debug) << L"METransformNeedInput";
+				m_eventCbFunc(EncodeEvent::NeedInput);	//向capture请求一帧
+				PLOG(plog::info) << L"User call back finish";
+
+				winrt::com_ptr<IMFMediaBuffer> inputBuffer;
+				winrt::com_ptr<ID3D11Texture2D> texture2D = nullptr;
 				{
-					m_eventCbFunc(EncodeEvent::NeedInput);	//向capture请求一帧
-					winrt::com_ptr<IMFMediaBuffer> inputBuffer;
-					
-					winrt::com_ptr<ID3D11Texture2D> texture2D = nullptr;
-					while (!m_closed.load())
+					std::lock_guard<std::mutex> lock(m_d3d11textureLock);
+					texture2D = m_d3d11texture;
+					if (!texture2D)
 					{
-						std::lock_guard<std::mutex> lock(m_d3d11textureLock);
-						if (m_d3d11texture)
-						{
-							texture2D = m_d3d11texture;
-							break;
-						}
-					}
-
-					D3D11_TEXTURE2D_DESC desc;
-					m_d3d11texture->GetDesc(&desc);
-
-					hr = m_colorConv->Convert(texture2D.get(), scaleTexture.get(), desc.Width, desc.Height, 0, 0);
-					if (FAILED(hr))
-					{
-						PLOG(plog::error) << L"convert exception hr=" << hr;
-						break;
-					}
-
-					hr = MFCreateDXGISurfaceBuffer(__uuidof(ID3D11Texture2D), scaleTexture.get(), 0, FALSE, inputBuffer.put());
-					if (FAILED(hr))
-					{
-						PLOG(plog::error) << L"MFCreateDXGISurfaceBuffer exception hr=" << hr;
-						break;
-					}
-
-					winrt::com_ptr<IMFSample> sample;
-					hr = MFCreateSample(sample.put());
-					hr = sample->AddBuffer(inputBuffer.get());
-					if (m_transform)
-					{
-						hr = m_transform->ProcessInput(m_inputStreamID, sample.get(), 0);
-						if (FAILED(hr))
-						{
-							PLOG(plog::error) << L"ProcessInput failed. hr=" << hr;
-						}
+						PLOG(plog::error) << L"No input frame.";
+						continue;
 					}
 				}
-				break;
 
-			case METransformHaveOutput:
+				D3D11_TEXTURE2D_DESC desc;
+				m_d3d11texture->GetDesc(&desc);
+
+				hr = m_colorConv->Convert(texture2D.get(), scaleTexture.get(), desc.Width, desc.Height, 0, 0);
+				if (FAILED(hr))
 				{
-					DWORD status;
-					MFT_OUTPUT_DATA_BUFFER outputBuffer;
-					outputBuffer.dwStreamID = m_outputStreamID;
-					outputBuffer.pSample = nullptr;
-					outputBuffer.dwStatus = 0;
-					outputBuffer.pEvents = nullptr;
+					PLOG(plog::error) << L"convert failed hr=" << std::hex << hr << std::dec;
+					break;
+				}
 
-					winrt::com_ptr<IMFMediaBuffer> pBuffer = NULL;
+				hr = MFCreateDXGISurfaceBuffer(__uuidof(ID3D11Texture2D), scaleTexture.get(), 0, FALSE, inputBuffer.put());
+				if (FAILED(hr))
+				{
+					PLOG(plog::error) << L"MFCreateDXGISurfaceBuffer failed hr=" << std::hex << hr << std::dec;
+					break;
+				}
+
+				winrt::com_ptr<IMFSample> sample;
+				MFCreateSample(sample.put());
+				sample->AddBuffer(inputBuffer.get());
+
+				hr = m_transform->ProcessInput(m_inputStreamID, sample.get(), 0);
+				if (FAILED(hr))
+				{
+					PLOG(plog::error) << L"ProcessInput failed. hr=" << std::hex << hr << std::dec;
+				}
+			}
+			else if(eventType == METransformHaveOutput)
+			{
+				PLOG(plog::debug) << L"METransformHaveOutput";
+				DWORD status;
+				MFT_OUTPUT_DATA_BUFFER outputBuffer;
+				outputBuffer.dwStreamID = m_outputStreamID;
+				outputBuffer.pSample = nullptr;
+				outputBuffer.dwStatus = 0;
+				outputBuffer.pEvents = nullptr;
+
+				winrt::com_ptr<IMFMediaBuffer> pBuffer = NULL;
+				hr = m_transform->ProcessOutput(0, 1, &outputBuffer, &status);
+				if (outputBuffer.pSample)
+				{
+					outputBuffer.pSample->GetBufferByIndex(0, pBuffer.put());
 					BYTE* pData;
-					hr = m_transform->ProcessOutput(0, 1, &outputBuffer, &status);
-					DWORD maxvalue = 0;
-					DWORD curr = 0;
-					if (outputBuffer.pSample)
+					DWORD maxDataLen = 0;
+					DWORD dataLen = 0;
+					hr = pBuffer->Lock(&pData, &maxDataLen, &dataLen);
+					if (SUCCEEDED(hr))
 					{
-						outputBuffer.pSample->GetBufferByIndex(0, pBuffer.put());
-						mtimesstamp = GetTickCount() * 1000000;
-						hr = pBuffer->Lock(&pData, &maxvalue, &curr);
-						if (SUCCEEDED(hr))
-						{
-							bool biskey = false;
-							biskey = IsIDRSample(pData, curr);
-							m_callbackFun(pData, curr, mtimesstamp, true, biskey, 0, m_pArg);
-							pBuffer->Unlock();
-						}
+						bool biskey = false;
+						biskey = IsIDRSample(pData, dataLen);
+						uint64_t mtimesstamp = GetTickCount64() * 1000000;
+						m_callbackFun(pData, dataLen, mtimesstamp, true, biskey, 0, m_pArg);
+						pBuffer->Unlock();
 					}
-
-					if (outputBuffer.pSample)
-						outputBuffer.pSample->Release();
-					if (outputBuffer.pEvents)
-						outputBuffer.pEvents->Release();
-					currTime = clock();
-					tGap = currTime - startClock;
-					if (tGap < m_frameTime)
-					{
-						iSleep = m_frameTime - tGap;
-						sleepE(m_frameTime - tGap);
-					}
-
-					icount++;
-					if (currTime - startClickClock > 10000)
-					{
-						PLOG(plog::info) << L"frame = " << icount / 10;
-						icount = 0;
-						startClickClock = currTime;
-					}
-					startClock = clock();
 				}
-				break;
-			default:
+
+				if (outputBuffer.pSample) {
+					outputBuffer.pSample->Release();
+				}
+				if (outputBuffer.pEvents) {
+					outputBuffer.pEvents->Release();
+				}
+
+				//statistic
+				icount++;
+				if (currTime - startClickClock > 10000)
+				{
+					PLOG(plog::info) << L"frame = " << icount / 10;
+					icount = 0;
+					startClickClock = currTime;
+				}
+
+				//sleep
+				currTime = clock();
+				tGap = (double)(currTime - startClock) / (double)CLOCKS_PER_SEC * 1000.0;
+				if (tGap < m_frameTime)
+				{
+					int iSleep = m_frameTime - tGap;
+					sleepE(iSleep);
+				}
+				startClock = clock();
+			}
+			else
+			{
+				PLOG(plog::debug) << L"Default event type: " << eventType;
 				break;
 			}
 
-		}
-		if (m_colorConv)
-		{
-			m_colorConv->Cleanup();
-			m_colorConv = nullptr;
 		}
 		PLOG(plog::info) << L"CMFEncoder::EncodeThread end";
 	}
@@ -833,22 +851,24 @@ namespace shiwj
 		{
 			m_encoderThread.join();
 		}
-		HRESULT hr;
 		if (m_transform)
 		{
-			hr = m_transform->ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, NULL);
-			hr = m_transform->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, NULL);
-			hr = m_transform->ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, NULL);
-			hr = m_transform->ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, NULL);
+			m_transform->ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, NULL);
+			m_transform->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, NULL);
+			m_transform->ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, NULL);
+			m_transform->ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, NULL);
 		}
-		if (mpCodecAPI)
+		if (m_colorConv)
 		{
-			mpCodecAPI->Release();
-			mpCodecAPI = nullptr;
+			m_colorConv->Cleanup();
+			m_colorConv = nullptr;
+		}
+		if (m_codecAPI)
+		{
+			m_codecAPI = nullptr;
 		}
 		if (m_transform)
 		{
-			m_transform->Release();
 			m_transform = nullptr;
 		}
 		if (m_mfActive)
@@ -856,6 +876,7 @@ namespace shiwj
 			m_mfActive->ShutdownObject();
 			m_mfActive = nullptr;
 		}
+
 #if 0
 		StopAudioCapture();
 #endif

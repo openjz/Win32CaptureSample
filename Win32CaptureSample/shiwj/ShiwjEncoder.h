@@ -68,16 +68,15 @@ namespace shiwj {
 	public:
 		using EventCBFunc = std::function<void(EncodeEvent)>;
 		~CMFEncoder();
-		int Init(EventCBFunc eventCbFunc,
+		int Start(EventCBFunc eventCbFunc,
 			winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice device, 
 			int width, int height, int fps, const char* filePath, bool inputAudio, bool outputAudio);
 		int EncodeFrame(winrt::com_ptr<ID3D11Texture2D> frameTexture);
 		void Close();
 	private:
 		int CreateEncoder();
-		int SetInputOutPut();
-		int SetInputType();
 		int SetOutputType();
+		int SetInputType();
 
 		void SetEncodeCallback(std::function<void(unsigned char*, int, unsigned long long, bool, bool, int, void*)> callback, void* pArg);
 		void EncodeCallback(unsigned char* data, int len, unsigned long long time, bool invalid, bool iskey, int Iinvalid, void* parg);
@@ -94,7 +93,6 @@ namespace shiwj {
 		std::unique_ptr<EncoderParam> m_encoderParam = nullptr;
 		UINT m_resetToken;
 		winrt::com_ptr<IMFDXGIDeviceManager> m_deviceManager{ nullptr };
-		HANDLE m_writeMp4Event = NULL;
 		st_record  m_recordInfo;
 		winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice m_device{nullptr};
 		winrt::com_ptr<ID3D11Device> m_d3dDevice{ nullptr };
@@ -105,7 +103,7 @@ namespace shiwj {
 		winrt::com_ptr<IMFMediaEventGenerator> m_eventGen{nullptr};
 		DWORD m_inputStreamID = -1;
 		DWORD m_outputStreamID = -1;
-		winrt::com_ptr<ICodecAPI> mpCodecAPI = nullptr;
+		winrt::com_ptr<ICodecAPI> m_codecAPI = nullptr;
 		winrt::com_ptr<ID3D11Texture2D> scaleTexture = nullptr;
 		winrt::Windows::Graphics::SizeInt32 scaleTextureSize;
 
