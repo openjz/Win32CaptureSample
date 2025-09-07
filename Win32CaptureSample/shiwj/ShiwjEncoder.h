@@ -71,15 +71,12 @@ namespace shiwj {
 		int Start(EventCBFunc eventCbFunc,
 			winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice device, 
 			int width, int height, int fps, const char* filePath, bool inputAudio, bool outputAudio);
-		int EncodeFrame(winrt::com_ptr<ID3D11Texture2D> frameTexture);
+		int EncodeFrame(winrt::com_ptr<ID3D11Texture2D> frameTexture, uint64_t tsMicro);
 		void Close();
 	private:
 		int CreateEncoder();
 		int SetOutputType();
 		int SetInputType();
-
-		void SetEncodeCallback(std::function<void(unsigned char*, int, unsigned long long, bool, bool, int, void*)> callback, void* pArg);
-		void EncodeCallback(unsigned char* data, int len, unsigned long long time, bool invalid, bool iskey, int Iinvalid, void* parg);
 
 		int StartEncoder();
 		void EncodeThread();
@@ -91,7 +88,6 @@ namespace shiwj {
 		void StopEncoder();
 
 		std::unique_ptr<EncoderParam> m_encoderParam = nullptr;
-		UINT m_resetToken;
 		winrt::com_ptr<IMFDXGIDeviceManager> m_deviceManager{ nullptr };
 		st_record  m_recordInfo;
 		winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice m_device{nullptr};
@@ -107,23 +103,22 @@ namespace shiwj {
 		winrt::com_ptr<ID3D11Texture2D> scaleTexture = nullptr;
 		winrt::Windows::Graphics::SizeInt32 scaleTextureSize;
 
-		std::function<void(unsigned char*, int, unsigned long long timesstamp, bool, bool, int, void*)>  m_callbackFun = nullptr;
-		void* m_pArg = nullptr;
-
-		std::list<st_video>  m_videoList;
 		CRITICAL_SECTION m_cs;
+		std::list<st_video>  m_videoList;
+
+		//audio
 		std::mutex m_audioInLock;
 		std::list<st_audio>  m_audioInList;
-		int m_cacheMaxSec = 120 * 1000;//最大缓存时长
 		std::list<st_audio>  m_audioOutList;
 		std::mutex m_audioOutLock;
 
 		std::thread m_encoderThread;
-		long m_frameTime;
 		std::atomic<bool>  m_closed = false;
 
-		std::mutex m_d3d11textureLock;
-		winrt::com_ptr<ID3D11Texture2D> m_d3d11texture{ nullptr };	//todo: 获取自EncodeFrame
+		std::mutex m_inputLock;
+		winrt::com_ptr<ID3D11Texture2D> m_inputTexture{ nullptr };
+		//这个值暂时用不到，它是wgc捕获到frame时的实际时间戳，由于我们有可能会获取到重复帧，这个值也有可能重复
+		uint64_t m_inputTsMicro = 0;
 
 		MP4Encoder m_mp4Encoder;
 		std::thread thRecord;

@@ -295,6 +295,7 @@ void SimpleCapture::EncodeEventCallback(shiwj::EncodeEvent e)
     std::lock_guard<std::mutex>  lg(m_frameCacheMutex);
     if (m_frameCache != nullptr)
     {
+		uint64_t tsMicro = m_frameCache.SystemRelativeTime().count() / 10;    //将frame的时间戳转换为微秒
         auto texture = GetDXGIInterfaceFromObject<ID3D11Texture2D>(m_frameCache.Surface());
         winrt::com_ptr<ID3D11Texture2D> result;
 
@@ -309,7 +310,7 @@ void SimpleCapture::EncodeEventCallback(shiwj::EncodeEvent e)
         winrt::check_hresult(m_d3dDevice->CreateTexture2D(&desc, nullptr, result.put()));
         m_d3dContext->CopyResource(result.get(), texture.get());
 
-        m_encoder->EncodeFrame(result);
+        m_encoder->EncodeFrame(result, tsMicro);
     }
     return;
 }

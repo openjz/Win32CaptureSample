@@ -12,16 +12,6 @@
 
 namespace shiwj
 {
-	static void sleepE(int interValue) {
-		if (interValue < 0) {
-			return;
-		}
-		timeBeginPeriod(1);
-		DWORD dwTime = timeGetTime();
-		Sleep(interValue);
-		timeEndPeriod(1);
-	}
-
 	CMFEncoder::~CMFEncoder()
 	{
 		if (m_closed == false)
@@ -65,7 +55,8 @@ namespace shiwj
 			return 1;
 		}
 
-		hr = MFCreateDXGIDeviceManager(&m_resetToken, m_deviceManager.put());
+		UINT resetToken;
+		hr = MFCreateDXGIDeviceManager(&resetToken, m_deviceManager.put());
 		if (FAILED(hr))
 		{
 			PLOG(plog::error) << L"MFCreateDXGIDeviceManager failed. hr: 0x" << std::hex << hr <<std::dec;
@@ -74,7 +65,7 @@ namespace shiwj
 
 		//将dxgi设备绑定到 mf dxgi device manager
 		auto dxgiDevice = m_d3dDevice.as<IDXGIDevice>();
-		hr = m_deviceManager->ResetDevice(dxgiDevice.get(), m_resetToken);
+		hr = m_deviceManager->ResetDevice(dxgiDevice.get(), resetToken);
 		if(FAILED(hr))
 		{
 			PLOG(plog::error) << L"IMFDXGIDeviceManager::ResetDevice failed. hr: 0x" << std::hex << hr << std::dec;
@@ -156,12 +147,14 @@ namespace shiwj
 		return ret;
 	}
 
-	int CMFEncoder::EncodeFrame(winrt::com_ptr<ID3D11Texture2D> frameTexture)
+	int CMFEncoder::EncodeFrame(winrt::com_ptr<ID3D11Texture2D> frameTexture, uint64_t tsMicro)
 	{
-		std::lock_guard<std::mutex> lock(m_d3d11textureLock);
-		m_d3d11texture = frameTexture;
+		std::lock_guard<std::mutex> lock(m_inputLock);
+		m_inputTexture = frameTexture;
+		m_inputTsMicro = tsMicro;
 		return 0;
 	}
+	
 	void CMFEncoder::Close() {
 		PLOG(plog::info) << L"CMFEncoder::Close";
 		int ret = 0;
@@ -267,6 +260,7 @@ namespace shiwj
 			m_outputStreamID = 0;
 		}
 
+		//去掉B帧
 		hr = attributes->SetUINT32(MF_LOW_LATENCY, TRUE);
 		if (FAILED(hr))
 		{
@@ -349,10 +343,6 @@ namespace shiwj
 		scaleTextureSize.Height = m_encoderParam->height;
 
 		PLOG(plog::info) << L"Create scale texture success";
-
-
-		SetEncodeCallback(std::bind(&CMFEncoder::EncodeCallback, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4, std::placeholders::_5, std::placeholders::_6, std::placeholders::_7), nullptr);
-
 		return 0;
 	}
 
@@ -486,110 +476,6 @@ namespace shiwj
 		return 0;
 	}
 
-	void CMFEncoder::SetEncodeCallback(std::function<void(unsigned char*, int, unsigned long long, bool, bool, int, void*)> callback, void* pArg)
-	{
-		m_callbackFun = callback;
-		m_pArg = pArg;
-	}
-
-	void CMFEncoder::EncodeCallback(unsigned char* data, int len, unsigned long long time, bool invalid, bool iskey, int Iinvalid, void* parg)
-	{
-
-		st_video videodata;
-		videodata.len = len;
-		videodata.pdata = new unsigned char[len];
-		videodata.isIDR = iskey;
-		videodata.uiTime = GetTickCount();
-		UINT64 currentTime = videodata.uiTime;
-
-		memcpy_s(videodata.pdata, len, data, len);
-		EnterCriticalSection(&(m_cs));
-		m_videoList.push_back(videodata);
-		st_video stVideo = m_videoList.front();
-		bool bDelCacheFile = false;
-		if (m_cacheMaxSec < (videodata.uiTime - stVideo.uiTime))
-		{
-			bDelCacheFile = true;
-		}
-		LeaveCriticalSection(&(m_cs));
-
-		if (bDelCacheFile)
-		{
-			//清理掉一个GOP数据
-			int frameCount = 0;
-			while (true)
-			{
-				EnterCriticalSection(&(m_cs));
-				if (m_videoList.size() == 0)
-				{
-					LeaveCriticalSection(&(m_cs));
-					break;
-				}
-				st_video stVideo = m_videoList.front();
-				frameCount++;
-				if (stVideo.isIDR)
-				{
-					delete[] stVideo.pdata;
-					m_videoList.pop_front();
-					LeaveCriticalSection(&(m_cs));
-					break;
-				}
-				else
-				{
-					delete[] stVideo.pdata;
-				}
-				m_videoList.pop_front();
-				LeaveCriticalSection(&(m_cs));
-			}
-			//清理音频数据
-			while (true)
-			{
-				std::lock_guard<std::mutex> lock(m_audioInLock);
-
-				if (m_audioInList.size() == 0)
-				{
-					break;
-				}
-				st_audio stAudio = m_audioInList.front();
-				frameCount++;
-				if (stAudio.uiTime - currentTime > m_cacheMaxSec)
-				{
-					delete[] stAudio.pdata;
-					m_audioInList.pop_front();
-					break;
-				}
-				else
-				{
-					break;
-				}
-				m_audioInList.pop_front();
-			}
-			//清理音频数据
-			while (true)
-			{
-				std::lock_guard<std::mutex> lock(m_audioOutLock);
-
-				if (m_audioOutList.size() == 0)
-				{
-					break;
-				}
-				st_audio stAudio = m_audioOutList.front();
-				frameCount++;
-				if (stAudio.uiTime - currentTime > m_cacheMaxSec)
-				{
-					delete[] stAudio.pdata;
-					m_audioOutList.pop_front();
-					break;
-				}
-				else
-				{
-					break;
-				}
-				m_audioOutList.pop_front();
-			}
-		}
-	}
-
 	int CMFEncoder::StartEncoder()
 	{
 		int ret = 0;
@@ -622,13 +508,9 @@ namespace shiwj
 	{
 		PLOG(plog::info) << L"CMFEncoder::EncodeThread start";
 		HRESULT hr;
-		m_frameTime = 1000.0 / m_encoderParam->fps;	//每帧间隔多少ms
-		clock_t  startClock = clock();
-		clock_t  startClickClock = clock();
-		long     currTime = 0;
-		long     tGap = 0;
-		static int icount = 0;
-
+		uint64_t frameTime = 1000000.0 / (double)(m_encoderParam->fps);	//每帧相隔多少us
+		uint64_t lastTime = shiwj::GetCurrentTimestampMicro();	//unit:us
+		uint64_t pts = 0;	//unit:100ns
 		while (!m_closed.load())
 		{
 			if (m_eventGen == nullptr)
@@ -636,6 +518,7 @@ namespace shiwj
 				PLOG(plog::error) << L"m_eventGen is null";
 				break;
 			}
+
 			winrt::com_ptr<IMFMediaEvent> event;
 			hr = m_eventGen->GetEvent(0, event.put());
 			if (FAILED(hr))
@@ -652,26 +535,25 @@ namespace shiwj
 			}
 			if(eventType == METransformNeedInput)
 			{
-				PLOG(plog::debug) << L"METransformNeedInput";
 				m_eventCbFunc(EncodeEvent::NeedInput);	//向capture请求一帧
-				PLOG(plog::info) << L"User call back finish";
 
 				winrt::com_ptr<IMFMediaBuffer> inputBuffer;
-				winrt::com_ptr<ID3D11Texture2D> texture2D = nullptr;
+				winrt::com_ptr<ID3D11Texture2D> inputTexture = nullptr;
 				{
-					std::lock_guard<std::mutex> lock(m_d3d11textureLock);
-					texture2D = m_d3d11texture;
-					if (!texture2D)
+					std::lock_guard<std::mutex> lock(m_inputLock);
+					inputTexture = m_inputTexture;
+					if (!inputTexture)
 					{
 						PLOG(plog::error) << L"No input frame.";
 						continue;
 					}
+					pts = shiwj::GetCurrentTimestampMicro()*10;
 				}
 
 				D3D11_TEXTURE2D_DESC desc;
-				m_d3d11texture->GetDesc(&desc);
+				m_inputTexture->GetDesc(&desc);
 
-				hr = m_colorConv->Convert(texture2D.get(), scaleTexture.get(), desc.Width, desc.Height, 0, 0);
+				hr = m_colorConv->Convert(inputTexture.get(), scaleTexture.get(), desc.Width, desc.Height, 0, 0);
 				if (FAILED(hr))
 				{
 					PLOG(plog::error) << L"convert failed hr=" << std::hex << hr << std::dec;
@@ -689,15 +571,37 @@ namespace shiwj
 				MFCreateSample(sample.put());
 				sample->AddBuffer(inputBuffer.get());
 
+				sample->SetSampleTime(pts);
+				//sample->SetSampleDuration();//这里我们并不知道下一帧什么时候到来，因此不设置duration
+				
+				//查看input sample属性
+				/*PLOG(plog::info) << L"======> Input sample attributes:";
+				shiwj::PrintMFAttributes(sample.get());*/
+
+				//提交input sample
+				//PLOG(plog::debug) << L"Submit input sample";
 				hr = m_transform->ProcessInput(m_inputStreamID, sample.get(), 0);
 				if (FAILED(hr))
 				{
 					PLOG(plog::error) << L"ProcessInput failed. hr=" << std::hex << hr << std::dec;
 				}
+
+				//sleep
+				uint64_t currTime = shiwj::GetCurrentTimestampMicro();
+				uint64_t timeRun = currTime - lastTime;
+				if (timeRun < frameTime)
+				{
+					uint64_t timeRest = frameTime - timeRun;
+					WaitFor(timeRest);
+				}
+				else
+				{
+					PLOG(plog::debug) << L"Continue";
+				}
+				lastTime = shiwj::GetCurrentTimestampMicro();
 			}
 			else if(eventType == METransformHaveOutput)
 			{
-				PLOG(plog::debug) << L"METransformHaveOutput";
 				DWORD status;
 				MFT_OUTPUT_DATA_BUFFER outputBuffer;
 				outputBuffer.dwStreamID = m_outputStreamID;
@@ -707,8 +611,61 @@ namespace shiwj
 
 				winrt::com_ptr<IMFMediaBuffer> pBuffer = NULL;
 				hr = m_transform->ProcessOutput(0, 1, &outputBuffer, &status);
+				if(FAILED(hr))
+				{
+					if (outputBuffer.pSample) {
+						outputBuffer.pSample->Release();
+					}
+					if (outputBuffer.pEvents) {
+						outputBuffer.pEvents->Release();
+					}
+					PLOG(plog::error) << L"ProcessOutput failed. hr=" << std::hex << hr << std::dec;
+					continue;
+				}
+
+				//查看outputBuffer.pEvents
+				/*DWORD pcElements = 0;
+				outputBuffer.pEvents->GetElementCount(&pcElements);
+				for (int i = 0; i < pcElements; i++)
+				{
+					winrt::com_ptr<IUnknown> unknow = nullptr;
+					outputBuffer.pEvents->GetElement(i, unknow.put());
+					winrt::com_ptr<IMFMediaEvent> mediaEvent = unknow.as< IMFMediaEvent>();
+				}*/
+
 				if (outputBuffer.pSample)
 				{
+					//查看output sample
+					//PLOG(plog::info) << L"======> MFT_OUTPUT_DATA_BUFFER::pSample attributes:";
+					//shiwj::PrintMFAttributes(outputBuffer.pSample);
+
+					// 获取输出样本的时间戳，这个时间戳是调用ProcessInput前通过sample->SetSampleTime(pts);设置的
+					// 以100ns为单位
+					LONGLONG outputSampleTime = 0;
+					hr = outputBuffer.pSample->GetSampleTime(&outputSampleTime);
+					if (FAILED(hr))
+					{
+						PLOG(plog::error) << L"GetSampleTime failed. hr=" << std::hex << hr << std::dec;
+						continue;
+					}
+
+					uint64_t outputTsMilli = outputSampleTime / 10 /1000;
+
+					//判断是否为idr帧
+					bool isIDR = false;
+					uint32_t picType = 0;
+					hr = outputBuffer.pSample->GetUINT32(MFSampleExtension_VideoEncodePictureType, &picType);
+					if(FAILED(hr))
+					{
+						PLOG(plog::error) << L"GetUINT32 MFSampleExtension_VideoEncodePictureType failed. hr=" << std::hex << hr << std::dec;
+						continue;
+					}
+					if (picType == eAVEncH264PictureType::eAVEncH264PictureType_IDR)
+					{
+						isIDR = true;
+					}
+
+					//push mux data
 					outputBuffer.pSample->GetBufferByIndex(0, pBuffer.put());
 					BYTE* pData;
 					DWORD maxDataLen = 0;
@@ -716,10 +673,17 @@ namespace shiwj
 					hr = pBuffer->Lock(&pData, &maxDataLen, &dataLen);
 					if (SUCCEEDED(hr))
 					{
-						bool biskey = false;
-						biskey = IsIDRSample(pData, dataLen);
-						uint64_t mtimesstamp = GetTickCount64() * 1000000;
-						m_callbackFun(pData, dataLen, mtimesstamp, true, biskey, 0, m_pArg);
+						//make mux data
+						st_video videodata;
+						videodata.len = dataLen;
+						videodata.pdata = new unsigned char[dataLen];
+						videodata.isIDR = isIDR;
+						videodata.uiTime = outputTsMilli;
+						memcpy_s(videodata.pdata, dataLen, pData, dataLen);
+						//push to mux list
+						EnterCriticalSection(&(m_cs));
+						m_videoList.push_back(videodata);
+						LeaveCriticalSection(&(m_cs));
 						pBuffer->Unlock();
 					}
 				}
@@ -730,25 +694,6 @@ namespace shiwj
 				if (outputBuffer.pEvents) {
 					outputBuffer.pEvents->Release();
 				}
-
-				//statistic
-				icount++;
-				if (currTime - startClickClock > 10000)
-				{
-					PLOG(plog::info) << L"frame = " << icount / 10;
-					icount = 0;
-					startClickClock = currTime;
-				}
-
-				//sleep
-				currTime = clock();
-				tGap = (double)(currTime - startClock) / (double)CLOCKS_PER_SEC * 1000.0;
-				if (tGap < m_frameTime)
-				{
-					int iSleep = m_frameTime - tGap;
-					sleepE(iSleep);
-				}
-				startClock = clock();
 			}
 			else
 			{
@@ -760,7 +705,6 @@ namespace shiwj
 		PLOG(plog::info) << L"CMFEncoder::EncodeThread end";
 	}
 
-	//todo: 有更好的方法，SUCCEEDED(outputBuffer.pSample->GetUINT32(MFSampleExtension_VideoEncodePictureType, &picType)))
 	bool CMFEncoder::IsIDRSample(unsigned char* data, int len)
 	{
 		int istart = 0;

@@ -403,7 +403,7 @@ namespace shiwj {
 					output << L" (" << width << L"x" << height <<L")";
 				}
 			}
-			if (IsEqualGUID(guid, MF_MT_FRAME_RATE))
+			else if (IsEqualGUID(guid, MF_MT_FRAME_RATE))
 			{
 				uint32_t num = 0, den = 0;
 				hr = MFGetAttributeRatio(pAttr, MF_MT_FRAME_RATE, &num, &den);
@@ -444,6 +444,11 @@ namespace shiwj {
 			{MF_MT_ALL_SAMPLES_INDEPENDENT,L"MF_MT_ALL_SAMPLES_INDEPENDENT"},
 			{MF_MT_YUV_MATRIX, L"MF_MT_YUV_MATRIX"},
 			{MF_LOW_LATENCY, L"MF_LOW_LATENCY"},
+			{MFSampleExtension_DecodeTimestamp, L"MFSampleExtension_DecodeTimestamp"},
+			{MFSampleExtension_LongTermReferenceFrameInfo, L"MFSampleExtension_LongTermReferenceFrameInfo"},
+			{MFSampleExtension_VideoEncodePictureType, L"MFSampleExtension_VideoEncodePictureType"},
+			{MFSampleExtension_CleanPoint, L"MFSampleExtension_CleanPoint"},
+			{MFSampleExtension_Discontinuity, L"MFSampleExtension_Discontinuity"},
 
 			//mftransform.h
 			{MF_SA_D3D11_AWARE, L"MF_SA_D3D11_AWARE"},
@@ -461,7 +466,6 @@ namespace shiwj {
 			{MFT_CODEC_MERIT_Attribute, L"MFT_CODEC_MERIT_Attribute"},
 
 		};
-
 		auto it = attributeNameMap.find(guid);
 		if (it == attributeNameMap.end())
 		{
@@ -470,6 +474,44 @@ namespace shiwj {
 			return guidString;
 		}
 		return it->second;
+	}
+
+	void WaitFor(uint64_t intervalUs)
+	{
+		if (intervalUs < 0)
+		{
+			return;
+		}
+
+		// 使用高精度定时器失败，回退到原方法
+		HANDLE hTimer = CreateWaitableTimerExW(nullptr, nullptr,
+			CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+
+		if (hTimer != nullptr)
+		{
+			LARGE_INTEGER dueTime;
+			dueTime.QuadPart = -static_cast<LONGLONG>(intervalUs) * 10LL; // 转换为100纳秒单位，负值表示相对时间
+
+			if (SetWaitableTimer(hTimer, &dueTime, 0, nullptr, nullptr, FALSE))
+			{
+				WaitForSingleObject(hTimer, INFINITE);
+			}
+			else
+			{
+				PLOG(plog::debug) << L"SetWaitableTimer failed, use Sleep instead.";
+				timeBeginPeriod(1);
+				Sleep(intervalUs / 1000);
+				timeEndPeriod(1);
+			}
+			CloseHandle(hTimer);
+		}
+		else
+		{
+			PLOG(plog::debug) << L"CreateWaitableTimerExW failed, use Sleep instead.";
+			timeBeginPeriod(1);
+			Sleep(intervalUs / 1000);
+			timeEndPeriod(1);
+		}
 	}
 }
 

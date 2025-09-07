@@ -32,6 +32,8 @@ namespace shiwj{
 	void PrintMFAttributes(IMFAttributes* pAttr);
 
 	std::wstring GetMFAttributeName(const winrt::guid& guid);
+
+	void WaitFor(uint64_t intervalUs);
 }
 
 int WriteBinaryToFile(winrt::Windows::Storage::StorageFile& file, winrt::array_view<uint8_t> data);
