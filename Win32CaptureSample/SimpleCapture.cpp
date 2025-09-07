@@ -76,7 +76,7 @@ void SimpleCapture::StartCapture()
     m_encoder = std::make_unique<shiwj::CMFEncoder>();
     uint64_t ts = shiwj::GetCurrentTimestampMilli();
     std::string videoFilePath = shiwj::Wstring2Utf8String(shiwj::GetVideoPath() + std::to_wstring(ts) + L".mp4");
-    m_encoder->Start([this](shiwj::EncodeEvent e) {EncodeEventCallback(e);}, m_device, 1920, 1080,30, videoFilePath.c_str(), false, false);
+    m_encoder->Start([this](shiwj::EncodeEvent e) {EncodeEventCallback(e);}, m_device, 1920, 1080, 60, videoFilePath.c_str(), false, false);
 }
 
 winrt::ICompositionSurface SimpleCapture::CreateSurface(winrt::Compositor const& compositor)

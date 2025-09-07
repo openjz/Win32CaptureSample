@@ -181,10 +181,14 @@ namespace shiwj
 	int CMFEncoder::CreateEncoder()
 	{
 		int ret = 0;
-
-		m_colorConv = std::make_unique<RGBToNV12>(m_d3dDevice.get(), m_d3dContext.get());
-		HRESULT hr = m_colorConv->Init();
-
+		HRESULT hr = S_OK;
+		m_imageConv = std::make_unique<CTextureScale>(m_d3dDevice, m_d3dContext);
+		ret = m_imageConv->Init();
+		if(ret != 0)
+		{
+			PLOG(plog::error) << L"CTextureScale Init failed, ret:" << ret;
+			return ret;
+		}
 		//Ã¶¾Ù²¢¼¤»î±àÂëÆ÷
 		CComHeapPtr<IMFActivate*> activateRaw;
 		UINT32 activateCount = 0;
@@ -339,8 +343,6 @@ namespace shiwj
 		desc.BindFlags = D3D11_BIND_RENDER_TARGET;
 		desc.CPUAccessFlags = 0;
 		m_d3dDevice->CreateTexture2D(&desc, NULL, scaleTexture.put());
-		scaleTextureSize.Width = m_encoderParam->width;
-		scaleTextureSize.Height = m_encoderParam->height;
 
 		PLOG(plog::info) << L"Create scale texture success";
 		return 0;
@@ -553,7 +555,7 @@ namespace shiwj
 				D3D11_TEXTURE2D_DESC desc;
 				m_inputTexture->GetDesc(&desc);
 
-				hr = m_colorConv->Convert(inputTexture.get(), scaleTexture.get(), desc.Width, desc.Height, 0, 0);
+				hr = m_imageConv->Convert(inputTexture, scaleTexture);
 				if (FAILED(hr))
 				{
 					PLOG(plog::error) << L"convert failed hr=" << std::hex << hr << std::dec;
@@ -802,10 +804,10 @@ namespace shiwj
 			m_transform->ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, NULL);
 			m_transform->ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, NULL);
 		}
-		if (m_colorConv)
+		if (m_imageConv)
 		{
-			m_colorConv->Cleanup();
-			m_colorConv = nullptr;
+			m_imageConv->Cleanup();
+			m_imageConv = nullptr;
 		}
 		if (m_codecAPI)
 		{

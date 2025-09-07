@@ -162,7 +162,6 @@
     <ClCompile Include="pch.cpp" />
     <ClCompile Include="SampleWindow.cpp" />
     <ClCompile Include="shiwj\MP4Encoder.cpp" />
-    <ClCompile Include="shiwj\Preproc.cpp" />
     <ClCompile Include="shiwj\ShiwjCommon.cpp" />
     <ClCompile Include="shiwj\ShiwjEncoder.cpp" />
     <ClCompile Include="SimpleCapture.cpp" />
@@ -176,7 +175,6 @@
     <ClInclude Include="pch.h" />
     <ClInclude Include="SampleWindow.h" />
     <ClInclude Include="shiwj\MP4Encoder.h" />
-    <ClInclude Include="shiwj\Preproc.h" />
     <ClInclude Include="shiwj\ShiwjCommon.h" />
     <ClInclude Include="shiwj\ShiwjEncoder.h" />
     <ClInclude Include="SimpleCapture.h" />

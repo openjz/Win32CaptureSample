@@ -8,7 +8,7 @@
 
 #include "thirdparty/libmp4v2/2.0/include/mp4v2/general.h"
 
-#include "Preproc.h"
+#include "ShiwjCommon.h"
 #include "Mp4Encoder.h"
 
 namespace shiwj {
@@ -93,7 +93,7 @@ namespace shiwj {
 		winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice m_device{nullptr};
 		winrt::com_ptr<ID3D11Device> m_d3dDevice{ nullptr };
 		winrt::com_ptr<ID3D11DeviceContext> m_d3dContext{ nullptr };
-		std::unique_ptr<RGBToNV12> m_colorConv = nullptr;
+		std::unique_ptr<CTextureScale> m_imageConv = nullptr;
 		winrt::com_ptr<IMFTransform> m_transform{nullptr};
 		winrt::com_ptr<IMFActivate>  m_mfActive = nullptr;
 		winrt::com_ptr<IMFMediaEventGenerator> m_eventGen{nullptr};
@@ -101,7 +101,6 @@ namespace shiwj {
 		DWORD m_outputStreamID = -1;
 		winrt::com_ptr<ICodecAPI> m_codecAPI = nullptr;
 		winrt::com_ptr<ID3D11Texture2D> scaleTexture = nullptr;
-		winrt::Windows::Graphics::SizeInt32 scaleTextureSize;
 
 		CRITICAL_SECTION m_cs;
 		std::list<st_video>  m_videoList;

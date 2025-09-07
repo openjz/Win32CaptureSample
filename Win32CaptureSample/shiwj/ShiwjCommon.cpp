@@ -46,7 +46,8 @@ namespace util
 	using namespace robmikh::common::uwp;
 }
 
-namespace shiwj {
+namespace shiwj
+{
 
 	constexpr wchar_t* g_videoPath = L"Win32CaptureSample\\video\\";
 	constexpr wchar_t* g_logPath = L"Win32CaptureSample\\log\\";
@@ -400,7 +401,7 @@ namespace shiwj {
 				}
 				else
 				{
-					output << L" (" << width << L"x" << height <<L")";
+					output << L" (" << width << L"x" << height << L")";
 				}
 			}
 			else if (IsEqualGUID(guid, MF_MT_FRAME_RATE))
@@ -512,6 +513,158 @@ namespace shiwj {
 			Sleep(intervalUs / 1000);
 			timeEndPeriod(1);
 		}
+	}
+}
+
+namespace shiwj
+{
+	CTextureScale::CTextureScale(winrt::com_ptr<ID3D11Device> pDev, winrt::com_ptr<ID3D11DeviceContext> pCtx)
+		: m_d3dDevice(pDev), m_d3dContext(pCtx)
+	{
+	}
+
+	CTextureScale::~CTextureScale()
+	{
+		Cleanup();
+	}
+
+	int CTextureScale::Init()
+	{
+		m_videoDevice = m_d3dDevice.try_as<ID3D11VideoDevice>();
+		m_videoContext = m_d3dContext.try_as<ID3D11VideoContext>();
+		if (!m_videoDevice)
+		{
+			PLOG(plog::error) << L"Device does not support ID3D11VideoDevice interface";
+			return 1;
+		}
+
+		if (!m_videoContext)
+		{
+			PLOG(plog::error) << L"Context does not support ID3D11VideoContext interface";
+			return 1;
+		}
+		return 0;
+	}
+
+	void CTextureScale::Cleanup()
+	{
+		if (m_d3dDevice)
+		{
+			m_d3dDevice = nullptr;
+		}
+		if (m_d3dContext)
+		{
+			m_d3dContext = nullptr;
+		}
+
+		if (m_videoDevice)
+		{
+			m_videoDevice = nullptr;
+		}
+
+		if (m_videoContext)
+		{
+			m_videoContext = nullptr;
+		}
+
+		if (m_videoProcessor)
+		{
+			m_videoProcessor = nullptr;
+		}
+
+		if (m_videoProcessEnum)
+		{
+			m_videoProcessEnum = nullptr;
+		}
+	}
+
+	int CTextureScale::Convert(winrt::com_ptr<ID3D11Texture2D> pRGB, winrt::com_ptr<ID3D11Texture2D> pYUV)
+	{
+		int ret = 0;
+		HRESULT hr = S_OK;
+
+		if (!m_videoDevice || !m_videoContext)
+		{
+			PLOG(plog::error) << L"!m_videoProcessor || !m_videoContext";
+			return 1;
+		}
+
+		D3D11_TEXTURE2D_DESC inDesc = { 0 };
+		D3D11_TEXTURE2D_DESC outDesc = { 0 };
+		pRGB->GetDesc(&inDesc);
+		pYUV->GetDesc(&outDesc);
+
+		if (m_videoProcessor)
+		{
+			if (m_inDesc.Width != inDesc.Width || m_inDesc.Height != inDesc.Height ||
+				m_outDesc.Width != outDesc.Width || m_outDesc.Height != outDesc.Height)
+			{
+				if (m_videoProcessEnum)
+				{
+					m_videoProcessEnum = nullptr;
+				}
+				if (m_videoProcessor)
+				{
+					m_videoProcessor = nullptr;
+				}
+			}
+		}
+
+		if (!m_videoProcessor)
+		{
+			m_inDesc = inDesc;
+			m_outDesc = outDesc;
+			D3D11_VIDEO_PROCESSOR_CONTENT_DESC contentDesc =
+			{
+				D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
+				{ 1, 1 }, inDesc.Width, inDesc.Height,
+				{ 1, 1 }, outDesc.Width, outDesc.Height,
+				D3D11_VIDEO_USAGE_OPTIMAL_QUALITY
+			};
+
+			hr = m_videoDevice->CreateVideoProcessorEnumerator(&contentDesc, m_videoProcessEnum.put());
+			if (FAILED(hr))
+			{
+				PLOG(plog::error) << L"CreateVideoProcessorEnumerator failed, hr=" << std::hex << hr << std::dec;
+			}
+			hr = m_videoDevice->CreateVideoProcessor(m_videoProcessEnum.get(), 0, m_videoProcessor.put());
+			if (FAILED(hr))
+			{
+
+				PLOG(plog::error) << L"CreateVideoProcessor";
+				return hr;
+			}
+		}
+
+		RECT sourceRect{ 0,0, m_inDesc.Width, m_inDesc.Height };
+		m_videoContext->VideoProcessorSetStreamSourceRect(m_videoProcessor.get(), 0, TRUE, &sourceRect);
+
+		winrt::com_ptr<ID3D11VideoProcessorInputView> inputView = nullptr;
+		D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC inputViewDesc = { 0, D3D11_VPIV_DIMENSION_TEXTURE2D,{ 0,0 } };
+		hr = m_videoDevice->CreateVideoProcessorInputView(pRGB.get(), m_videoProcessEnum.get(), &inputViewDesc, inputView.put());
+		if (FAILED(hr))
+		{
+			PLOG(plog::error) << L"CreateVideoProcessInputView: 0x" << std::hex << hr << std::dec;
+			return 1;
+		}
+
+		winrt::com_ptr<ID3D11VideoProcessorOutputView> outputView = nullptr;
+		D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC outputViewDesc = { D3D11_VPOV_DIMENSION_TEXTURE2D };
+		hr = m_videoDevice->CreateVideoProcessorOutputView(pYUV.get(), m_videoProcessEnum.get(), &outputViewDesc, outputView.put());
+		if (FAILED(hr))
+		{
+			PLOG(plog::error) << L"CreateVideoProcessorOutputView: 0x" << std::hex << hr << std::dec;
+			return 1;
+		}
+
+		D3D11_VIDEO_PROCESSOR_STREAM stream = { TRUE, 0, 0, 0, 0, nullptr, inputView.get(), nullptr };
+		hr = m_videoContext->VideoProcessorBlt(m_videoProcessor.get(), outputView.get(), 0, 1, &stream);
+		if (FAILED(hr))
+		{
+			PLOG(plog::error) << L"VideoProcessorBlt: 0x" << std::hex << hr << std::dec;
+			return 1;
+		}
+		return 0;
 	}
 }
 
